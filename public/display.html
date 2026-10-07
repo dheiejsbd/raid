@@ -1,0 +1,1640 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>아볼루온 레이드</title>
+
+  <script src="/socket.io/socket.io.js"></script>
+
+  <style>
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+
+      background:
+        radial-gradient(
+          ellipse at center,
+          #241313 0%,
+          #0d0d11 60%,
+          #050507 100%
+        );
+
+      color: white;
+
+      font-family:
+        Arial,
+        "Pretendard",
+        sans-serif;
+
+      overflow: hidden;
+    }
+
+    /* -----------------------------------------
+       전체 화면
+    ----------------------------------------- */
+
+    #game {
+
+      width: 100vw;
+      height: 100vh;
+
+      position: relative;
+
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* -----------------------------------------
+       상단
+    ----------------------------------------- */
+
+    #header {
+
+      height: 9vh;
+
+      display: flex;
+
+      align-items: center;
+      justify-content: center;
+
+      position: relative;
+
+      font-size: 2.1vw;
+
+      font-weight: 900;
+
+      text-shadow:
+        0 2px 5px black;
+    }
+
+    #player-count {
+
+      color: #ffd700;
+
+      margin-left: 10px;
+    }
+
+    #round-display {
+
+      position: absolute;
+
+      right: 30px;
+
+      font-size: 1.3vw;
+
+      color: #aaa;
+    }
+
+    /* -----------------------------------------
+       전투 영역
+    ----------------------------------------- */
+
+    #battlefield {
+
+      flex: 1;
+
+      min-height: 0;
+      margin-bottom: 100px;
+
+
+      display: flex;
+
+      position: relative;
+    }
+
+    /* -----------------------------------------
+       왼쪽 플레이어 군단
+    ----------------------------------------- */
+
+    #player-side {
+
+      width: 48%;
+
+      position: relative;
+
+      z-index: 10;
+
+      padding:
+        20px 20px 90px 30px;
+    }
+
+    #army-title {
+
+      position: absolute;
+
+      top: 10px;
+      left: 30px;
+
+      color: #aaa;
+
+      font-size: 1.2vw;
+
+      font-weight: bold;
+    }
+
+    #player-army {
+
+      position: absolute;
+
+      left: 25px;
+      right: 10px;
+
+      top: 55px;
+      bottom: 20px;
+
+      overflow: visible;
+    }
+
+    /* -----------------------------------------
+       개별 캐릭터
+    ----------------------------------------- */
+
+    .player-character {
+
+      position: absolute;
+
+      left: var(--player-x);
+      top: var(--player-y);
+
+      width: clamp(52px, 7vw, 110px);
+
+      transform: translate(-50%, -50%);
+      transform-origin: center;
+
+      min-width: 0;
+
+      display: flex;
+
+      flex-direction: column;
+
+      justify-content: flex-end;
+
+      align-items: center;
+
+      transition:
+        filter 0.2s ease,
+        left 0.2s ease,
+        top 0.2s ease;
+    }
+
+    .player-character:hover {
+
+      transform:
+        translate(-50%, -50%) scale(1.08);
+    }
+
+    .player-name {
+
+      max-width: 100%;
+
+      padding:
+        3px 7px;
+
+      border-radius: 7px;
+
+      background:
+        rgba(0, 0, 0, 0.65);
+
+      color: white;
+
+      font-size: clamp(
+        9px,
+        0.85vw,
+        15px
+      );
+
+      font-weight: 700;
+
+      white-space: nowrap;
+
+      overflow: hidden;
+
+      text-overflow: ellipsis;
+
+      margin-bottom: 2px;
+
+      text-shadow:
+        0 1px 3px black;
+    }
+
+    .player-character .avatar {
+
+      width: clamp(
+        45px,
+        5vw,
+        90px
+      );
+
+      height: clamp(
+        55px,
+        6vw,
+        110px
+      );
+
+      display: flex;
+
+      align-items: flex-end;
+      justify-content: center;
+
+      filter:
+        drop-shadow(
+          0 4px 6px
+          rgba(0, 0, 0, 0.75)
+        );
+
+      transition:
+        filter 0.2s ease;
+    }
+
+    .player-character .avatar img {
+    
+      width: 100%;
+      height: 100%;
+    
+      object-fit: contain;
+    
+      display: block;
+    
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+
+    /* -----------------------------------------
+       공격 애니메이션
+    ----------------------------------------- */
+
+    .attacking {
+
+      z-index: 100;
+
+      animation:
+        attackBoss
+        0.9s
+        cubic-bezier(.2,.8,.2,1);
+    }
+
+    .opening-attack {
+      filter: drop-shadow(0 0 16px #ffd700);
+      animation-duration: 1.35s;
+    }
+
+    .execution-attacking {
+      z-index: 1000;
+      animation: executionStrike 1.6s cubic-bezier(.12,.82,.2,1) forwards;
+      filter: drop-shadow(0 0 26px #ff2929);
+    }
+
+    @keyframes executionStrike {
+      0% {
+        transform: translate(-50%, -50%) scale(1);
+      }
+      38% {
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(2.25);
+        filter: drop-shadow(0 0 35px #ffd700) brightness(1.8);
+      }
+      58% {
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(2.55);
+        filter: drop-shadow(0 0 48px #ffffff) brightness(2);
+      }
+      100% {
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(1.8);
+        filter: drop-shadow(0 0 30px #ff2929);
+      }
+    }
+
+    .attacking:not(.opening-attack) {
+      animation-name: regularAttack;
+    }
+
+    @keyframes regularAttack {
+      0%, 100% {
+        transform: translate(-50%, -50%) scale(1);
+      }
+      45%, 65% {
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(1.12);
+        filter: drop-shadow(0 0 8px rgba(255, 215, 0, 0.65));
+      }
+    }
+
+    @keyframes attackBoss {
+
+      0% {
+
+        transform:
+          translate(-50%, -50%)
+          scale(1);
+
+      }
+
+      45% {
+
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(1.5);
+
+        filter:
+          drop-shadow(
+            0 0 20px
+            #ffd700
+          );
+      }
+
+      65% {
+
+        transform:
+          translate(-50%, -50%)
+          translate(var(--attack-x), var(--attack-y))
+          scale(1.6);
+
+        filter:
+          drop-shadow(
+            0 0 35px
+            #ffffff
+          );
+      }
+
+      100% {
+
+        transform:
+          translate(-50%, -50%)
+          scale(1);
+
+      }
+    }
+
+    /* -----------------------------------------
+       가운데 VS
+    ----------------------------------------- */
+
+    #vs {
+
+      width: 7%;
+
+      display: flex;
+
+      justify-content: center;
+      align-items: center;
+
+      position: relative;
+
+      z-index: 5;
+    }
+
+    #vs-text {
+
+      font-size: 3vw;
+
+      font-weight: 1000;
+
+      font-style: italic;
+
+      color: #ff4444;
+
+      text-shadow:
+        0 0 15px
+        rgba(255, 0, 0, 0.8);
+    }
+
+    /* -----------------------------------------
+       보스 영역
+    ----------------------------------------- */
+
+    #boss-side {
+
+      flex: 1;
+
+      position: relative;
+
+      display: flex;
+
+      justify-content: center;
+      align-items: center;
+
+      padding-bottom: 50px;
+    }
+
+    #boss-label {
+
+      position: absolute;
+
+      top: 10px;
+
+      font-size: 1.5vw;
+
+      font-weight: 900;
+
+      color: #ff6666;
+    }
+
+    #boss-wrapper {
+
+      position: relative;
+
+      display: flex;
+
+      flex-direction: column;
+
+      align-items: center;
+
+      justify-content: center;
+
+      width: 100%;
+
+      height: 100%;
+    }
+
+    #boss {
+
+      font-size: clamp(
+        130px,
+        16vw,
+        300px
+      );
+
+      line-height: 1;
+
+      filter:
+        drop-shadow(
+          0 0 30px
+          rgba(255, 0, 0, 0.8)
+        );
+
+      transition:
+        opacity 0.8s ease,
+        filter 0.8s ease;
+    }
+
+    .boss-shake {
+
+      animation:
+        bossShake
+        0.3s
+        ease-in-out;
+    }
+
+    @keyframes bossShake {
+
+      0%,
+      100% {
+        transform:
+          translateX(0)
+          rotate(0);
+      }
+
+      20% {
+        transform:
+          translateX(-15px)
+          rotate(-3deg);
+      }
+
+      40% {
+        transform:
+          translateX(15px)
+          rotate(3deg);
+      }
+
+      60% {
+        transform:
+          translateX(-12px)
+          rotate(-2deg);
+      }
+
+      80% {
+        transform:
+          translateX(12px)
+          rotate(2deg);
+      }
+    }
+
+    /* -----------------------------------------
+       데미지 표시
+    ----------------------------------------- */
+
+    .damage-pop {
+
+      position: fixed;
+
+      z-index: 200;
+
+      font-size: clamp(
+        25px,
+        3vw,
+        55px
+      );
+
+      font-weight: 1000;
+
+      color: #ffff00;
+
+      text-shadow:
+        0 0 5px red,
+        2px 2px 10px #ff0000;
+
+      pointer-events: none;
+
+      animation:
+        damageFloat
+        0.9s
+        ease-out
+        forwards;
+    }
+
+    @keyframes damageFloat {
+
+      0% {
+
+        opacity: 1;
+
+        transform:
+          translateY(0)
+          scale(0.7);
+      }
+
+      30% {
+
+        opacity: 1;
+
+        transform:
+          translateY(-20px)
+          scale(1.3);
+      }
+
+      100% {
+
+        opacity: 0;
+
+        transform:
+          translateY(-100px)
+          scale(1);
+      }
+    }
+
+    /* -----------------------------------------
+       하단 HP
+    ----------------------------------------- */
+
+    #bottom-panel {
+
+      position: absolute;
+
+      left: 5%;
+      right: 5%;
+
+      bottom: 15px;
+
+      z-index: 300;
+    }
+
+    #hp-container {
+
+      height: 45px;
+
+      position: relative;
+
+      border:
+        3px solid white;
+
+      border-radius: 30px;
+
+      background: #222;
+
+      overflow: hidden;
+
+      box-shadow:
+        0 0 20px
+        rgba(255, 0, 0, 0.5);
+    }
+
+    #hp-bar {
+
+      width: 100%;
+
+      height: 100%;
+
+      background:
+        linear-gradient(
+          90deg,
+          #ff0055,
+          #ff2200,
+          #ff9900
+        );
+
+      transition:
+        width 0.25s ease;
+    }
+
+    #hp-text {
+
+      position: absolute;
+
+      left: 0;
+      right: 0;
+      top: 8px;
+
+      text-align: center;
+
+      font-size: 22px;
+
+      font-weight: 1000;
+
+      text-shadow:
+        2px 2px 5px black;
+    }
+
+    /* -----------------------------------------
+       대사
+    ----------------------------------------- */
+
+    #dialogue {
+
+      position: absolute;
+
+      left: 50%;
+
+      transform:
+        translateX(-50%);
+
+      bottom: 72px;
+
+      z-index: 300;
+
+      width: 70%;
+
+      text-align: center;
+
+      font-size: 1.4vw;
+
+      font-weight: 700;
+
+      color: #ffb0b0;
+
+      text-shadow:
+        0 2px 5px black;
+    }
+
+    /* -----------------------------------------
+       승리 화면
+    ----------------------------------------- */
+
+    #victory {
+
+      position: fixed;
+
+      inset: 0;
+
+      z-index: 1000;
+
+      display: none;
+
+      align-items: center;
+      justify-content: center;
+
+      flex-direction: column;
+
+      background:
+        radial-gradient(
+          circle,
+          rgba(255,215,0,0.25),
+          rgba(0,0,0,0.95)
+        );
+
+      animation:
+        victoryFade
+        0.8s ease;
+    }
+
+    #victory.show {
+      display: flex;
+    }
+
+    #victory-cross {
+
+      font-size:
+        clamp(
+          100px,
+          15vw,
+          250px
+        );
+
+      color: #ffd700;
+
+      text-shadow:
+        0 0 40px
+        #ffffff;
+    }
+
+    #victory-title {
+
+      font-size:
+        clamp(
+          35px,
+          5vw,
+          80px
+        );
+
+      font-weight: 1000;
+
+      color: #ffd700;
+
+      text-align: center;
+    }
+
+    #victory-sub {
+
+      margin-top: 15px;
+
+      font-size:
+        clamp(
+          18px,
+          2vw,
+          32px
+        );
+
+      font-weight: bold;
+    }
+
+    @keyframes victoryFade {
+
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    /* -----------------------------------------
+       작은 화면
+    ----------------------------------------- */
+
+    @media (max-width: 800px) {
+
+      #header {
+        font-size: 18px;
+      }
+
+      #round-display {
+        display: none;
+      }
+
+      #vs-text {
+        font-size: 22px;
+      }
+
+      #dialogue {
+        font-size: 13px;
+      }
+
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+<div id="game">
+
+  <!-- ---------------------------------------
+       헤더
+  ---------------------------------------- -->
+
+  <header id="header">
+
+    ⚔️ 십자가 군단 보스 레이드
+
+    <span id="player-count">
+      군병 0명
+    </span>
+
+    <span id="round-display">
+      대기 중
+    </span>
+
+  </header>
+
+
+  <!-- ---------------------------------------
+       전투장
+  ---------------------------------------- -->
+
+  <main id="battlefield">
+
+
+    <!-- 플레이어 군단 -->
+
+    <section id="player-side">
+
+      <div id="army-title">
+        ⚔️ 십자가 군단
+      </div>
+
+      <div id="player-army">
+        <!-- Socket.IO로 자동 생성 -->
+      </div>
+
+    </section>
+
+
+    <!-- VS -->
+
+    <div id="vs">
+
+      <div id="vs-text">
+        VS
+      </div>
+
+    </div>
+
+
+    <!-- 보스 -->
+
+    <section id="boss-side">
+
+      <div id="boss-label">
+        👿 마왕 아볼루온
+      </div>
+
+      <div id="boss-wrapper">
+
+        <div id="boss">
+          👿
+        </div>
+
+      </div>
+
+    </section>
+
+
+  </main>
+
+<!-- 진행자 컨트롤 -->
+<!-- ---------------------------------------
+       대사
+  ---------------------------------------- -->
+
+  <div id="dialogue">
+
+    "기록되었으되(γέγραπται)!
+    말씀의 검으로 대적하라!"
+
+  </div>
+
+
+  <!-- ---------------------------------------
+       HP
+  ---------------------------------------- -->
+
+  <div id="bottom-panel">
+
+    <div id="hp-container">
+
+      <div id="hp-bar"></div>
+
+      <div id="hp-text">
+        10000 / 10000 HP
+      </div>
+
+    </div>
+
+  </div>
+
+
+</div>
+
+
+<!-- -----------------------------------------
+     승리 화면
+------------------------------------------ -->
+
+<div id="victory">
+
+  <div id="victory-cross">
+    ✝
+  </div>
+
+  <div id="victory-title">
+    마왕 아볼루온 격파!
+  </div>
+
+  <div id="victory-sub">
+    십자가에서 이미 승리하신
+    예수 그리스도 만세!
+  </div>
+
+</div>
+
+
+<script>
+
+  const socket = io();
+  let bossName = "마왕 아볼루온 (Apollyon)";
+
+
+  // ------------------------------------------
+  // DOM
+  // ------------------------------------------
+
+  const playerArmy =
+    document.getElementById(
+      "player-army"
+    );
+
+  const playerCount =
+    document.getElementById(
+      "player-count"
+    );
+
+  const roundDisplay =
+    document.getElementById(
+      "round-display"
+    );
+
+  const hpBar =
+    document.getElementById(
+      "hp-bar"
+    );
+
+  const hpText =
+    document.getElementById(
+      "hp-text"
+    );
+
+  const boss =
+    document.getElementById(
+      "boss"
+    );
+
+  const bossLabel = document.getElementById("boss-label");
+  const victoryTitle = document.getElementById("victory-title");
+
+  const dialogue =
+    document.getElementById(
+      "dialogue"
+    );
+
+  const victory =
+    document.getElementById(
+      "victory"
+    );
+
+
+  // ------------------------------------------
+  // HTML escape
+  // 닉네임을 안전하게 표시
+  // ------------------------------------------
+
+  function escapeHtml(value) {
+
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+  }
+
+
+  // ------------------------------------------
+  // HP 업데이트
+  // ------------------------------------------
+
+  function updateHp(
+    currentHp,
+    maxHp
+  ) {
+
+    const percent =
+      Math.max(
+        0,
+        Math.min(
+          100,
+          (currentHp / maxHp) * 100
+        )
+      );
+
+    hpBar.style.width =
+      `${percent}%`;
+
+    hpText.innerText =
+      `${currentHp.toLocaleString()} / ${maxHp.toLocaleString()} HP`;
+
+  }
+
+
+  // ------------------------------------------
+  // 플레이어 목록 렌더링
+  // ------------------------------------------
+
+  function renderPlayers(players) {
+
+    playerArmy.innerHTML = "";
+
+    playerCount.innerText =
+      `군병 ${players.length}명`;
+
+
+    const positions = getPlayerPositions(players);
+
+    players.forEach(
+      (player, index) => {
+
+        const element =
+          document.createElement("div");
+
+        element.className =
+          "player-character";
+
+        element.dataset.playerId =
+          player.id;
+
+        element.style.setProperty("--player-x", `${positions[index].x}%`);
+        element.style.setProperty("--player-y", `${positions[index].y}%`);
+
+
+        const classText =
+          player.className
+            ? ` · ${escapeHtml(player.className)}`
+            : "";
+
+
+        element.innerHTML = `
+          <div class="player-name">
+            ${escapeHtml(player.nickname)}
+            ${classText}
+          </div>
+        
+          <div class="avatar">
+            <img
+              src="/assets/characters/${encodeURIComponent(player.character)}"
+              alt="${escapeHtml(player.nickname)}"
+              draggable="false"
+            >
+          </div>
+        `;
+
+
+        playerArmy.appendChild(
+          element
+        );
+
+      }
+    );
+
+  }
+
+  function getPlayerPositions(players) {
+
+    // 가장자리에서 캐릭터/이름표가 잘리지 않도록 안전 여백을 둡니다.
+    const minX = 12;
+    const maxX = 88;
+    const minY = 22;
+    const maxY = 88;
+    const positions = [];
+    const minDistance = players.length > 35 ? 6 : players.length > 18 ? 9 : 13;
+
+    players.forEach(player => {
+      // 같은 플레이어는 목록 갱신 때마다 같은 위치를 유지합니다.
+      let seed = 0;
+      for (const char of String(player.id)) {
+        seed = (seed * 31 + char.charCodeAt(0)) >>> 0;
+      }
+      const random = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+
+      let point = null;
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        const candidate = {
+          x: minX + random() * (maxX - minX),
+          y: minY + random() * (maxY - minY)
+        };
+        const spaced = positions.every(existing =>
+          Math.hypot(candidate.x - existing.x, candidate.y - existing.y) >= minDistance
+        );
+        if (spaced || attempt === 23) {
+          point = candidate;
+          break;
+        }
+      }
+      positions.push(point);
+    });
+
+    return positions;
+  }
+
+
+  // ------------------------------------------
+  // Socket:
+  // 플레이어 목록
+  // ------------------------------------------
+
+  socket.on(
+    "players_update",
+    data => {
+
+      renderPlayers(
+        data.players || []
+      );
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // Socket:
+  // 접속자 수
+  // ------------------------------------------
+
+  socket.on(
+    "player_count_update",
+    data => {
+
+      playerCount.innerText =
+        `군병 ${data.count}명`;
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // Socket:
+  // 게임 상태
+  // ------------------------------------------
+
+  socket.on(
+    "game_state",
+    data => {
+
+      bossName = data.bossName || bossName;
+      bossLabel.innerText = `👿 ${bossName}`;
+      victoryTitle.innerText = `${bossName} 격파!`;
+
+      updateHp(
+        data.currentHp,
+        data.maxHp
+      );
+
+
+      if (
+        data.currentRound > 0
+      ) {
+
+        roundDisplay.innerText =
+          `${data.currentRound} ROUND`;
+
+      }
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // Socket:
+  // 문제 시작
+  // ------------------------------------------
+
+  socket.on(
+    "new_question",
+    quiz => {
+
+      roundDisplay.innerText =
+        `${quiz.round} ROUND · GOAL ${quiz.targetHp.toLocaleString()} HP`;
+
+      dialogue.innerText =
+        `👿 ${bossName}: "${quiz.bossTalk}"`;
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // Socket:
+  // 플레이어 공격
+  // ------------------------------------------
+
+  socket.on(
+    "player_attack",
+    data => {
+
+      // ----------------------------------------
+      // 공격한 플레이어 찾기
+      // ----------------------------------------
+
+      const attacker =
+        document.querySelector(
+          `.player-character[data-player-id="${CSS.escape(data.playerId)}"]`
+        );
+
+
+      // ----------------------------------------
+      // 캐릭터 공격 애니메이션
+      // ----------------------------------------
+
+      if (attacker) {
+
+        const avatar = attacker.querySelector(".avatar");
+        const attackerRect = (avatar || attacker).getBoundingClientRect();
+        const bossRect = boss.getBoundingClientRect();
+        const startX = attackerRect.left + attackerRect.width / 2;
+        const startY = attackerRect.top + attackerRect.height / 2;
+        const bossX = bossRect.left + bossRect.width / 2;
+        const bossY = bossRect.top + bossRect.height / 2;
+        const directionX = bossX - startX;
+        const directionY = bossY - startY;
+        const distance = Math.hypot(directionX, directionY) || 1;
+        const unitX = directionX / distance;
+        const unitY = directionY / distance;
+        const bossRadius = Math.min(bossRect.width, bossRect.height) * 0.4;
+        const characterRadius = Math.min(attackerRect.width, attackerRect.height) * 0.35;
+        const contactDistance = Math.max(0, bossRadius + characterRadius - 4);
+        const targetX = bossX - unitX * contactDistance;
+        const targetY = bossY - unitY * contactDistance;
+        attacker.style.setProperty("--attack-x", `${targetX - startX}px`);
+        attacker.style.setProperty("--attack-y", `${targetY - startY}px`);
+
+        attacker.classList.remove(
+          "attacking"
+        );
+
+        // animation 재시작
+        void attacker.offsetWidth;
+
+        attacker.classList.add(
+          "attacking"
+        );
+
+        if (data.openingAttack) {
+          attacker.classList.add("opening-attack");
+        } else {
+          attacker.classList.remove("opening-attack");
+        }
+
+
+        setTimeout(
+          () => {
+
+            attacker.classList.remove(
+              "attacking"
+            );
+            attacker.classList.remove("opening-attack");
+            attacker.style.removeProperty("--attack-x");
+            attacker.style.removeProperty("--attack-y");
+
+          },
+          data.openingAttack ? 1400 : 950
+        );
+
+      }
+
+
+      // ----------------------------------------
+      // 보스 흔들림
+      // ----------------------------------------
+
+      boss.classList.remove(
+        "boss-shake"
+      );
+
+      void boss.offsetWidth;
+
+      boss.classList.add(
+        "boss-shake"
+      );
+
+
+      setTimeout(
+        () => {
+
+          boss.classList.remove(
+            "boss-shake"
+          );
+
+        },
+        350
+      );
+
+
+      // ----------------------------------------
+      // HP
+      // ----------------------------------------
+
+      updateHp(
+        data.currentHp,
+        data.maxHp
+      );
+
+
+      // ----------------------------------------
+      // 데미지 표시
+      // ----------------------------------------
+
+      createDamagePop(
+        data.damage
+      );
+
+
+      // ----------------------------------------
+      // 전투 대사
+      // ----------------------------------------
+
+      dialogue.innerText =
+        `⚔️ ${data.nickname}의 말씀의 검 적중!`;
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // 최다 피해 플레이어의 처형 공격
+  // ------------------------------------------
+
+  socket.on("player_execution", data => {
+    let attacker = document.querySelector(
+      `.player-character[data-player-id="${CSS.escape(data.playerId)}"]`
+    );
+
+    if (!attacker && data.character) {
+      attacker = document.createElement("div");
+      attacker.className = "player-character";
+      attacker.dataset.playerId = data.playerId;
+      attacker.style.setProperty("--player-x", "45%");
+      attacker.style.setProperty("--player-y", "50%");
+      attacker.innerHTML = `
+        <div class="player-name">${escapeHtml(data.nickname)}</div>
+        <div class="avatar">
+          <img src="/assets/characters/${encodeURIComponent(data.character)}" alt="${escapeHtml(data.nickname)}" draggable="false">
+        </div>
+      `;
+      playerArmy.appendChild(attacker);
+    }
+
+    if (attacker) {
+      const avatar = attacker.querySelector(".avatar");
+      const attackerRect = (avatar || attacker).getBoundingClientRect();
+      const bossRect = boss.getBoundingClientRect();
+      const startX = attackerRect.left + attackerRect.width / 2;
+      const startY = attackerRect.top + attackerRect.height / 2;
+      const bossX = bossRect.left + bossRect.width / 2;
+      const bossY = bossRect.top + bossRect.height / 2;
+      const directionX = bossX - startX;
+      const directionY = bossY - startY;
+      const distance = Math.hypot(directionX, directionY) || 1;
+      const unitX = directionX / distance;
+      const unitY = directionY / distance;
+      const contactDistance = Math.min(bossRect.width, bossRect.height) * 0.35;
+      const targetX = bossX - unitX * contactDistance;
+      const targetY = bossY - unitY * contactDistance;
+
+      attacker.style.setProperty("--attack-x", `${targetX - startX}px`);
+      attacker.style.setProperty("--attack-y", `${targetY - startY}px`);
+      attacker.classList.remove("attacking", "opening-attack", "execution-attacking");
+      void attacker.offsetWidth;
+      attacker.classList.add("execution-attacking");
+    }
+
+    dialogue.innerText = `💥 ${data.nickname}의 최후의 일격!`;
+    createDamagePop(data.damage);
+    boss.classList.remove("boss-shake");
+    void boss.offsetWidth;
+    boss.classList.add("boss-shake");
+    setTimeout(() => boss.classList.remove("boss-shake"), 500);
+  });
+
+
+  // ------------------------------------------
+  // 데미지 텍스트
+  // ------------------------------------------
+
+  function createDamagePop(
+    damage
+  ) {
+
+    const pop =
+      document.createElement("div");
+
+    pop.className =
+      "damage-pop";
+
+    const damageText = Number(damage).toLocaleString("ko-KR", {
+      maximumFractionDigits: 2
+    });
+    pop.innerText = `-${damageText}`;
+
+
+    const bossSide =
+      document.getElementById(
+        "boss-side"
+      );
+
+
+    const rect =
+      bossSide.getBoundingClientRect();
+
+
+    // 보스 영역의 넓은 범위에서 매번 독립적인 좌표를 선택합니다.
+    const randomX = rect.left + rect.width * (0.1 + Math.random() * 0.8);
+    const randomY = rect.top + rect.height * (0.15 + Math.random() * 0.65);
+
+    pop.style.left =
+      `${Math.max(8, Math.min(window.innerWidth - 90, randomX))}px`;
+
+    pop.style.top =
+      `${Math.max(8, Math.min(window.innerHeight - 80, randomY))}px`;
+
+
+    document.body.appendChild(
+      pop
+    );
+
+
+    setTimeout(
+      () => pop.remove(),
+      900
+    );
+
+  }
+
+
+  // ------------------------------------------
+  // 기존 boss_damaged 이벤트
+  // ------------------------------------------
+
+  socket.on(
+    "boss_damaged",
+    data => {
+
+      updateHp(
+        data.currentHp,
+        data.maxHp
+      );
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // 보스 격파
+  // ------------------------------------------
+
+  socket.on(
+    "boss_defeated",
+    data => {
+
+      updateHp(
+        0,
+        data.maxHp
+      );
+
+
+      boss.style.opacity =
+        "0.15";
+
+      boss.style.filter =
+        "grayscale(1)";
+
+
+      dialogue.innerText =
+        data.executor
+          ? `🔥 ${data.executor.nickname}의 처형으로 ${data.bossName || bossName} 격파!`
+          : `🔥 ${data.bossName || bossName} 격파!`;
+
+      if (data.executor) {
+        victoryTitle.innerText = `${data.executor.nickname}의 처형!`;
+      }
+
+
+      setTimeout(
+        () => {
+
+          victory.classList.add(
+            "show"
+          );
+
+        },
+        600
+      );
+
+    }
+  );
+
+
+  // ------------------------------------------
+  // 게임 리셋
+  // ------------------------------------------
+
+  socket.on(
+    "game_reset",
+    data => {
+
+      document.querySelectorAll(".execution-attacking").forEach(attacker => {
+        attacker.classList.remove("execution-attacking");
+        attacker.style.removeProperty("--attack-x");
+        attacker.style.removeProperty("--attack-y");
+      });
+
+      updateHp(
+        data.currentHp,
+        data.maxHp
+      );
+
+
+      boss.style.opacity =
+        "1";
+
+      boss.style.filter =
+        "drop-shadow(0 0 30px rgba(255,0,0,0.8))";
+
+
+      victory.classList.remove(
+        "show"
+      );
+
+
+      dialogue.innerText =
+        "\"기록되었으되(γέγραπται)! " +
+        "말씀의 검으로 대적하라!\"";
+
+
+      roundDisplay.innerText =
+        "대기 중";
+
+    }
+  );
+
+
+// ------------------------------------------
+// 진행자: 라운드 시작
+// ------------------------------------------
+
+function startRound(round) {
+
+  socket.emit(
+    "start_round",
+    {
+      round: round
+    }
+  );
+
+}
+
+
+// ------------------------------------------
+// 진행자: 게임 리셋
+// ------------------------------------------
+
+function resetGame() {
+
+  if (
+    !confirm(
+      "게임을 처음 상태로 리셋하시겠습니까?"
+    )
+  ) {
+    return;
+  }
+
+  socket.emit(
+    "reset_game"
+  );
+
+}
+
+</script>
+
+</body>
+</html>

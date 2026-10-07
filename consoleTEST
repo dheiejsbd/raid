@@ -1,0 +1,34 @@
+window.__raidBots ??= [];
+
+const correctAnswers = {
+  1: 0,
+  2: 1,
+  3: 2
+};
+
+for (let i = 1; i <= 100; i++) {
+  const bot = io();
+  window.__raidBots.push(bot);
+
+  bot.on("connect", () => {
+    bot.emit("join", {
+      nickname: `테스트${i}`,
+      className: "테스트반"
+    });
+  });
+
+  bot.on("new_question", quiz => {
+    const selected = correctAnswers[quiz.round];
+
+    if (selected === undefined) return;
+
+    const delay = 1000 + Math.random() * 9000;
+
+    setTimeout(() => {
+      bot.emit("submit_answer", {
+        round: quiz.round,
+        selected
+      });
+    }, delay);
+  });
+}

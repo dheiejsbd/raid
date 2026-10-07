@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover"
+  >
+
+  <title>십자가 기사단</title>
+
+  <script src="/socket.io/socket.io.js"></script>
+
+  <style>
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+
+      margin: 0;
+
+      padding: max(14px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+      min-height: 100dvh;
+
+      background: #16161a;
+
+      color: white;
+
+      font-family:
+        Arial,
+        "Pretendard",
+        sans-serif;
+
+      text-align: center;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    input {
+
+      width: 100%;
+
+      padding: 15px;
+
+      margin: 8px 0;
+
+      font-size: 18px;
+
+      border-radius: 10px;
+
+      border: 1px solid #777;
+
+      text-align: center;
+    }
+
+    button {
+      touch-action: manipulation;
+    }
+
+    .action-btn {
+
+      width: 100%;
+
+      padding: 16px;
+
+      min-height: 54px;
+
+      margin-top: 10px;
+
+      font-size: 18px;
+
+      font-weight: bold;
+
+      border: none;
+
+      border-radius: 10px;
+
+      background: #2cb67d;
+
+      color: white;
+    }
+
+    .opt-btn {
+
+      width: 100%;
+
+      padding: 17px;
+
+      min-height: 56px;
+
+      margin: 7px 0;
+
+      font-size: 15px;
+
+      line-height: 1.45;
+
+      text-align: left;
+
+      border-radius: 12px;
+
+      border:
+        2px solid #7f5af0;
+
+      background: #242629;
+
+      color: white;
+    }
+
+    .opt-btn:disabled {
+      opacity: 0.5;
+    }
+
+    #boss-shout {
+
+      padding: 15px;
+
+      margin-bottom: 15px;
+
+      border-radius: 10px;
+
+      background: #ff5470;
+
+      font-weight: bold;
+    }
+
+    #attack-log {
+      height: 150px;
+      margin: -5px 0 15px;
+      padding: 10px 12px;
+      overflow-y: auto;
+      border: 1px solid #45464c;
+      border-radius: 10px;
+      background: #202126;
+      text-align: left;
+      overscroll-behavior: contain;
+    }
+
+    .attack-log-entry {
+      padding: 6px 2px;
+      border-bottom: 1px solid #383940;
+      color: #f4f4f5;
+      font-size: 14px;
+    }
+
+    .attack-log-empty {
+      color: #999aa1;
+      font-size: 14px;
+    }
+
+    #feedback {
+
+      height: 35px;
+
+      margin: 15px 0;
+
+      font-size: 20px;
+
+      font-weight: 900;
+    }
+
+    #waiting {
+
+      margin-top: 50px;
+
+      color: #aaa;
+
+      font-size: 18px;
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+
+  <!-- 입장 화면 -->
+
+  <div id="join-view">
+
+    <h2>
+      ⚔️ 십자가 기사단 소집
+    </h2>
+
+    <p>
+      이름과 반을 입력하고
+      무기고에 입장하라!
+    </p>
+
+    <input
+      id="nickname"
+      maxlength="20"
+      placeholder="이름"
+    >
+
+    <input
+      id="className"
+      maxlength="20"
+      placeholder="반 / 학년 (예: 중2-3)"
+    >
+
+    <button
+      class="action-btn"
+      onclick="joinGame()"
+    >
+      ⚔️ 입장하기
+    </button>
+
+  </div>
+
+
+  <!-- 대기/전투 화면 -->
+
+  <div
+    id="battle-view"
+    class="hidden"
+  >
+
+    <h2>
+      ⚔️ 말씀의 검
+    </h2>
+
+    <div id="waiting">
+      사령관의 명령을 기다리는 중입니다...
+    </div>
+
+    <div id="boss-shout">
+      보스 도발 대기 중...
+    </div>
+
+    <div id="attack-log" role="log" aria-live="polite" aria-label="정답 공격 로그">
+      <div class="attack-log-empty">정답 공격 로그가 여기에 표시됩니다.</div>
+    </div>
+
+    <h3 id="question-text"></h3>
+
+    <div id="feedback"></div>
+
+    <div id="options-container"></div>
+
+  </div>
+
+
+  <script>
+
+    const socket = io();
+
+    let currentRound = 0;
+
+    let joined = false;
+
+
+    // -----------------------------------------
+    // 입장
+    // -----------------------------------------
+
+    function joinGame() {
+
+      const nickname =
+        document
+          .getElementById("nickname")
+          .value
+          .trim();
+
+      const className =
+        document
+          .getElementById("className")
+          .value
+          .trim();
+
+
+      if (!nickname) {
+
+        alert("이름을 입력해주세요.");
+
+        return;
+      }
+
+
+      socket.emit(
+        "join",
+        {
+          nickname,
+          className
+        }
+      );
+
+    }
+
+
+    socket.on(
+      "join_success",
+      data => {
+
+        joined = true;
+
+        document
+          .getElementById("join-view")
+          .classList.add("hidden");
+
+        document
+          .getElementById("battle-view")
+          .classList.remove("hidden");
+
+      }
+    );
+
+
+    socket.on(
+      "join_error",
+      data => {
+
+        alert(data.message);
+
+      }
+    );
+
+
+    // -----------------------------------------
+    // 문제 출제
+    // -----------------------------------------
+
+    socket.on("answer_correct", data => {
+      const log = document.getElementById("attack-log");
+      log.querySelector(".attack-log-empty")?.remove();
+
+      const entry = document.createElement("div");
+      entry.className = "attack-log-entry";
+      const className = data.className?.trim();
+      const damage = Number(data.damage).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+      entry.textContent = className
+        ? `${data.nickname}·${className}의 공격! - ${damage}`
+        : `${data.nickname}의 공격! - ${damage}`;
+
+      log.appendChild(entry);
+      while (log.children.length > 100) {
+        log.firstElementChild.remove();
+      }
+      log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on("player_execution", data => {
+      const log = document.getElementById("attack-log");
+      log.querySelector(".attack-log-empty")?.remove();
+
+      const entry = document.createElement("div");
+      entry.className = "attack-log-entry";
+      const damage = Number(data.damage).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+      entry.textContent = data.className
+        ? `${data.nickname}·${data.className}의 처형! - ${damage}`
+        : `${data.nickname}의 처형! - ${damage}`;
+      log.appendChild(entry);
+      while (log.children.length > 100) {
+        log.firstElementChild.remove();
+      }
+      log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on(
+      "new_question",
+      quiz => {
+
+        currentRound =
+          quiz.round;
+
+
+        document
+          .getElementById("waiting")
+          .innerText =
+          `⚔️ ${quiz.round}라운드 전투 시작! · 보스 목표 HP ${quiz.targetHp.toLocaleString()}`;
+
+
+        document
+          .getElementById("boss-shout")
+          .innerText =
+          `👿 ${quiz.bossName || "아볼루온"}: "${quiz.bossTalk}"`;
+
+
+        document
+          .getElementById("question-text")
+          .innerText =
+          quiz.question;
+
+
+        document
+          .getElementById("feedback")
+          .innerText = "";
+
+
+        const container =
+          document.getElementById(
+            "options-container"
+          );
+
+        container.innerHTML = "";
+
+
+        quiz.options.forEach(
+          (option, index) => {
+
+            const button =
+              document.createElement("button");
+
+            button.className =
+              "opt-btn";
+
+            button.innerText =
+              `${index + 1}. ${option}`;
+
+
+            button.onclick =
+              () => submitAnswer(
+                index,
+                button
+              );
+
+
+            container.appendChild(button);
+
+          }
+        );
+
+      }
+    );
+
+
+    // -----------------------------------------
+    // 답안 제출
+    // -----------------------------------------
+
+    function submitAnswer(
+      selected,
+      clickedButton
+    ) {
+
+      const buttons =
+        document.querySelectorAll(
+          ".opt-btn"
+        );
+
+
+      // 서버 응답 전 연타 방지
+      buttons.forEach(
+        button => {
+          button.disabled = true;
+        }
+      );
+
+
+      socket.emit(
+        "submit_answer",
+        {
+          round: currentRound,
+          selected
+        }
+      );
+
+    }
+
+
+    // -----------------------------------------
+    // 공격 결과
+    // -----------------------------------------
+
+    socket.on(
+      "attack_result",
+      result => {
+
+        const feedback =
+          document.getElementById(
+            "feedback"
+          );
+
+
+        feedback.innerText =
+          result.msg;
+
+
+        feedback.style.color =
+          result.success
+            ? "#2cb67d"
+            : "#ff5470";
+
+
+        // 스마트폰 진동
+        if (
+          navigator.vibrate
+        ) {
+
+          navigator.vibrate(
+            result.success
+              ? [100, 50, 100]
+              : [200]
+          );
+
+        }
+
+
+        // 오답이면 다시 선택 가능
+        if (!result.success) {
+
+          setTimeout(
+            () => {
+
+              document
+                .querySelectorAll(
+                  ".opt-btn"
+                )
+                .forEach(
+                  button => {
+                    button.disabled =
+                      false;
+                  }
+                );
+
+            },
+            300
+          );
+
+        }
+
+      }
+    );
+
+
+    // -----------------------------------------
+    // 보스 격파
+    // -----------------------------------------
+
+    socket.on(
+      "boss_defeated",
+      data => {
+
+        const feedback =
+          document.getElementById(
+            "feedback"
+          );
+
+        feedback.innerText = data.executor
+          ? `🔥 ${data.executor.nickname}의 처형으로 ${data.bossName} 격파!`
+          : `🔥 승리! ${data.bossName}을 격파했습니다!`;
+
+        feedback.style.color =
+          "#ffd700";
+
+
+        document
+          .querySelectorAll(
+            ".opt-btn"
+          )
+          .forEach(
+            button => {
+              button.disabled = true;
+            }
+          );
+
+      }
+    );
+
+
+    // -----------------------------------------
+    // 게임 상태
+    // -----------------------------------------
+
+    socket.on(
+      "game_state",
+      state => {
+
+        if (
+          state.gameOver
+        ) {
+
+          document
+            .getElementById("waiting")
+            .innerText =
+            "🔥 이미 레이드가 종료되었습니다.";
+
+        }
+
+      }
+    );
+
+  </script>
+
+</body>
+
+</html>

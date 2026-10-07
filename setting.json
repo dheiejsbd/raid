@@ -1,0 +1,13 @@
+{
+  "bossName": "마왕 아볼루온 (Apollyon)",
+  "maxHp": 10000,
+  "characters": [
+    "Knite.png"
+  ],
+  "damageFirstToLastRatio": 1.75,
+  "attackQueue": {
+    "minDelayMs": 30,
+    "maxDelayMs": 1000,
+    "maxBatchSize": 4
+  }
+}
