@@ -1,0 +1,346 @@
+1. 시스템 구조 및 동작 원리
+
+* **메인 스크린 (빔프로젝터 화면, `/display`):**
+* 입장용 QR 코드 및 실시간 접속자 수 표시
+* 거대한 아볼루온 일러스트와 대형 HP 바
+* 아이들이 정답을 맞힐 때마다 화면 흔들림(Shake) 효과와 함께 데미지 이펙트(-100 HP) 플로팅
+* HP가 0이 되면 보스가 쓰러지며 십자가 승리 연출
+
+
+* **학생 모바일 화면 (`/`):**
+* QR 코드를 찍고 들어오면 닉네임과 반 입력 후 대기실 입장
+* 문제가 시작되면 4지선다형 성경 구절 보기 표시
+* 정답 터치 시: 스마트폰 진동 + "타격 성공! 말씀의 검(μάχαιρα [마카이라]) 적중!" 피드백
+
+
+### 2. 프로젝트 폴더 구조
+
+```text
+apollyon-raid/
+├── app.py
+├── requirements.txt
+└── templates/
+    ├── display.html   # 강단 빔프로젝터 메인 화면
+    └── player.html    # 학생 스마트폰용 웹 화면
+
+```
+
+**requirements.txt**
+
+```text
+flask
+flask-socketio
+eventlet
+qrcode
+
+```
+
+---
+
+### 3. 핵심 백엔드 코드 (`app.py`)
+
+```python
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'pilgrim-secret-key'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
+# 게임 상태 관리
+game_state = {
+    "boss_name": "마왕 아볼루온 (Apollyon)",
+    "max_hp": 10000,          # 100명 기준 (1인당 정답 시 100 데미지)
+    "current_hp": 10000,
+    "current_round": 1,
+    "is_started": False,
+    "players": {}
+}
+
+# 라운드별 퀴즈 데이터
+QUIZZES = [
+    {
+        "round": 1,
+        "boss_talk": "너는 배가 고프잖아! 돌을 떡으로 만들어 당장 채워라!",
+        "question": "사탄의 유혹에 맞설 말씀의 검(μάχαιρα)을 발사하라!",
+        "options": [
+            "사람이 떡으로만 살 것이 아니요 하나님의 입으로 나오는 말씀으로 사느니라",
+            "배고플 때는 일단 먹고 나서 기도하는 것이 상책이니라",
+            "금강산도 식후경이라 모든 유혹은 식후에 물러가느니라",
+            "내일 일을 염려하지 말고 지금 눈앞의 떡을 취하라"
+        ],
+        "answer": 0
+    },
+    {
+        "round": 2,
+        "boss_talk": "너 기독교인이라며? 성전 꼭대기에서 뛰어내려 봐! 천사가 받아줄걸?",
+        "question": "교만과 시험의 도발을 벨 격파 구절은?",
+        "options": [
+            "믿음이 산을 옮기니 의심하지 말고 뛰어내려라",
+            "기록되었으되 주 너의 하나님을 시험하지 말라",
+            "천사들이 너의 발을 받쳐 돌에 부딪히지 않게 하리라",
+            "보는 것이 믿는 것이니 기적을 행하라"
+        ],
+        "answer": 1
+    },
+    {
+        "round": 3,
+        "boss_talk": "딱 한 번만 나한테 엎드려 절해라. 세상의 인기와 쾌락을 다 줄게!",
+        "question": "세상과의 타협을 날려버릴 최후의 일격!",
+        "options": [
+            "좋은 게 좋은 것이니 세상과 적당히 타협하라",
+            "마음은 원이로되 육신이 약하니 어쩔 수 없도다",
+            "주 너의 하나님께 경배하고 다만 그를 섬기라!",
+            "원수를 사랑하는 마음으로 사탄과 화친하라"
+        ],
+        "answer": 2
+    }
+]
+
+@app.route('/')
+def player_view():
+    return render_template('player.html')
+
+@app.route('/display')
+def display_view():
+    return render_template('display.html')
+
+# 플레이어 접속
+@socketio.on('join')
+def handle_join(data):
+    nickname = data.get('nickname', '십자가 군병')
+    game_state['players'][request.sid] = nickname
+    emit('player_count_update', {'count': len(game_state['players'])}, broadcast=True)
+
+# 관리자(진행자)의 게임 시작 및 문제 출제
+@socketio.on('start_round')
+def handle_start_round(data):
+    round_idx = data.get('round', 1) - 1
+    quiz = QUIZZES[round_idx]
+    emit('new_question', quiz, broadcast=True)
+
+# 답안 제출 및 데미지 계산
+@socketio.on('submit_answer')
+def handle_submit(data):
+    round_idx = data.get('round') - 1
+    selected = data.get('selected')
+    player_name = game_state['players'].get(request.sid, '익명의 군병')
+
+    if QUIZZES[round_idx]['answer'] == selected:
+        damage = 100
+        game_state['current_hp'] = max(0, game_state['current_hp'] - damage)
+        
+        # 메인 스크린에 타격 브로드캐스트
+        emit('boss_damaged', {
+            'damage': damage,
+            'current_hp': game_state['current_hp'],
+            'max_hp': game_state['max_hp'],
+            'attacker': player_name
+        }, broadcast=True)
+        
+        # 학생 폰에 성공 피드백
+        emit('attack_result', {'success': True, 'msg': '말씀의 검 적중! -100 HP!'}, to=request.sid)
+    else:
+        emit('attack_result', {'success': False, 'msg': '방어막에 빗나갔습니다! 다시 조준하세요!'}, to=request.sid)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    game_state['players'].pop(request.sid, None)
+    emit('player_count_update', {'count': len(game_state['players'])}, broadcast=True)
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+
+```
+
+---
+
+### 4. 메인 스크린 템플릿 (`templates/display.html`)
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>마왕 아볼루온 레이드</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { margin: 0; background: #0d0d11; color: #fff; font-family: 'Pretendard', sans-serif; text-align: center; overflow: hidden; }
+        #header { padding: 20px; font-size: 28px; font-weight: bold; }
+        #hp-container { width: 80%; margin: 0 auto; background: #333; height: 50px; border-radius: 25px; border: 4px solid #fff; overflow: hidden; position: relative; }
+        #hp-bar { width: 100%; height: 100%; background: linear-gradient(90deg, #ff0055, #ff5500); transition: width 0.2s ease; }
+        #hp-text { position: absolute; width: 100%; top: 12px; font-weight: 900; font-size: 22px; text-shadow: 2px 2px 4px #000; }
+        #boss-arena { height: 420px; display: flex; align-items: center; justify-content: center; position: relative; }
+        #boss-img { width: 280px; filter: drop-shadow(0 0 20px rgba(255,0,0,0.6)); }
+        .shake { animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both; }
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-4px, 0, 0); }
+            20%, 80% { transform: translate3d(6px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-8px, 0, 0); }
+            40%, 60% { transform: translate3d(8px, 0, 0); }
+        }
+        .damage-pop { position: absolute; font-size: 40px; font-weight: 900; color: #ffff00; text-shadow: 2px 2px 10px #ff0000; animation: floatUp 0.8s ease-out forwards; }
+        @keyframes floatUp { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-80px); } }
+        #dialogue { font-size: 24px; color: #ff9999; margin: 15px; }
+        #admin-controls { margin-top: 15px; }
+        button { padding: 10px 20px; font-size: 18px; font-weight: bold; cursor: pointer; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div id="header">⚔️ 십자가 군단 보스 레이드: 마왕 아볼루온 (현재 군병: <span id="count">0</span>명)</div>
+    <div id="hp-container">
+        <div id="hp-bar"></div>
+        <div id="hp-text">10000 / 10000 HP</div>
+    </div>
+    <div id="dialogue">"기록되었으되(γέγραπται)! 말씀의 검으로 대적하라!"</div>
+    <div id="boss-arena">
+        <img id="boss-img" src="https://api.dicebear.com/7.x/bottts/svg?seed=Apollyon&backgroundColor=transparent" alt="Apollyon">
+    </div>
+
+    <!-- 진행자 버튼 (프로젝터 화면 하단 또는 별도 창에서 제어) -->
+    <div id="admin-controls">
+        <button onclick="triggerRound(1)">1라운드 시작</button>
+        <button onclick="triggerRound(2)">2라운드 시작</button>
+        <button onclick="triggerRound(3)">3라운드 시작</button>
+    </div>
+
+    <script>
+        const socket = io();
+        const hpBar = document.getElementById('hp-bar');
+        const hpText = document.getElementById('hp-text');
+        const bossImg = document.getElementById('boss-img');
+        const arena = document.getElementById('boss-arena');
+
+        socket.on('player_count_update', data => document.getElementById('count').innerText = data.count);
+
+        socket.on('boss_damaged', data => {
+            const percent = (data.current_hp / data.max_hp) * 100;
+            hpBar.style.width = percent + '%';
+            hpText.innerText = `${data.current_hp} / ${data.max_hp} HP`;
+
+            // 흔들림 및 데미지 플로팅
+            bossImg.classList.add('shake');
+            setTimeout(() => bossImg.classList.remove('shake'), 300);
+
+            const dmg = document.createElement('div');
+            dmg.className = 'damage-pop';
+            dmg.innerText = `-${data.damage} (검격!)`;
+            dmg.style.left = `${50 + (Math.random()*20 - 10)}%`;
+            dmg.style.top = `${40 + (Math.random()*20 - 10)}%`;
+            arena.appendChild(dmg);
+            setTimeout(() => dmg.remove(), 800);
+
+            if(data.current_hp <= 0) {
+                document.getElementById('dialogue').innerHTML = "🔥 마왕 격파! 십자가에서 이미 승리하신 예수 그리스도 만세!";
+                bossImg.style.opacity = '0.2';
+            }
+        });
+
+        function triggerRound(r) { socket.emit('start_round', { round: r }); }
+    </script>
+</body>
+</html>
+
+```
+
+---
+
+### 5. 모바일 학생 템플릿 (`templates/player.html`)
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>십자가 기사단 컨트롤러</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { margin: 0; padding: 20px; background: #16161a; color: #fff; font-family: sans-serif; text-align: center; }
+        .hidden { display: none; }
+        input { width: 80%; padding: 12px; font-size: 18px; border-radius: 8px; border: 1px solid #777; margin: 10px 0; text-align: center; }
+        button.action-btn { width: 100%; padding: 15px; margin: 8px 0; font-size: 16px; font-weight: bold; border-radius: 10px; border: none; background: #2cb67d; color: white; cursor: pointer; }
+        button.opt-btn { width: 100%; padding: 16px; margin: 8px 0; font-size: 15px; border-radius: 10px; background: #242629; border: 2px solid #7f5af0; color: #fffffe; line-height: 1.4; text-align: left; }
+        #boss-shout { background: #ff5470; padding: 12px; border-radius: 8px; font-weight: bold; margin-bottom: 15px; font-size: 15px; }
+        #feedback { font-size: 20px; font-weight: 900; margin: 15px 0; height: 30px; }
+    </style>
+</head>
+<body>
+    <!-- 1단계: 닉네임 입력 -->
+    <div id="join-view">
+        <h2>⚔️ 십자가 기사단 소집</h2>
+        <p>이름과 반을 입력하고 무기고에 입장하라!</p>
+        <input type="text" id="nickname" placeholder="예: 중2 김믿음"><br>
+        <button class="action-btn" onclick="joinGame()">입장하기</button>
+    </div>
+
+    <!-- 2단계: 퀴즈 공격 뷰 -->
+    <div id="battle-view" class="hidden">
+        <div id="boss-shout">보스 도발 대기 중...</div>
+        <h3 id="question-text">사령관의 명령을 기다리는 중입니다...</h3>
+        <div id="feedback"></div>
+        <div id="options-container"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        let currentRound = 1;
+
+        function joinGame() {
+            const name = document.getElementById('nickname').value.trim();
+            if(!name) return alert('이름을 입력하세요!');
+            socket.emit('join', { nickname: name });
+            document.getElementById('join-view').classList.add('hidden');
+            document.getElementById('battle-view').classList.remove('hidden');
+        }
+
+        socket.on('new_question', quiz => {
+            currentRound = quiz.round;
+            document.getElementById('boss-shout').innerText = `👿 아볼루온: "${quiz.boss_talk}"`;
+            document.getElementById('question-text').innerText = quiz.question;
+            document.getElementById('feedback').innerText = '';
+
+            const container = document.getElementById('options-container');
+            container.innerHTML = '';
+            quiz.options.forEach((opt, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'opt-btn';
+                btn.innerText = `${idx + 1}. ${opt}`;
+                btn.onclick = () => {
+                    socket.emit('submit_answer', { round: currentRound, selected: idx });
+                    // 버튼 연타 방지 0.5초 비활성화
+                    btn.disabled = true;
+                    setTimeout(() => btn.disabled = false, 500);
+                };
+                container.appendChild(btn);
+            });
+        });
+
+        socket.on('attack_result', res => {
+            const fb = document.getElementById('feedback');
+            fb.innerText = res.msg;
+            fb.style.color = res.success ? '#2cb67d' : '#ff5470';
+            if (navigator.vibrate) navigator.vibrate(res.success ? [100, 50, 100] : [200]);
+        });
+    </script>
+</body>
+</html>
+
+```
+
+---
+
+### 6. 현장 실행 및 배포 요령
+
+* **배포 방법:**
+* **로컬 실행:** 전도사님 노트북에서 `python app.py`를 실행하고, 같은 교회 와이파이에 연결된 상태에서 노트북의 로컬 IP(예: `192.168.0.15:5000`) 주소로 QR 코드를 생성해 띄우면 별도 서버 비용 없이 즉시 구동됩니다.
+* **클라우드 배포:** Render, Railway, 또는 호스팅 서버에 올려두고 해당 도메인 주소로 QR 코드를 만들면 LTE/5G로도 원활하게 동시 접속이 가능합니다.
+
+
+* **스마트폰 QR 연출:**
+* 입장 시 화면에 크게 띄워둔 QR 코드를 찍고 들어오게 합니다.
+* 100명이 동시에 접속할 때 메인 스크린 상단에 **'현재 군병: 78명... 95명...'** 카운트가 올라가면서 아이들의 기대감이 극대화됩니다.
+
+
+* **설교 및 결단과의 연결:**
+* 보스의 체력이 다 닳았을 때 로마 군병 복장의 전도사님이 강단으로 뛰어올라 스크린 앞을 가로막고, "우리의 지혜가 아닌, 기록된 말씀(γέγραπται [게그랍타이])과 이미 십자가에서 승리하신 예수 그리스도의 보혈로 승리했습니다!"를 선포하며 결단 기도로 바로 연결하십시오.

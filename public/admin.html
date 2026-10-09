@@ -8,7 +8,7 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100dvh; padding: max(20px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom)); background: #101116; color: #f5f5f7; font-family: system-ui, "Pretendard", sans-serif; }
-    main { width: min(100%, 520px); margin: 0 auto; }
+    main { width: min(100%, 760px); margin: 0 auto; }
     h1 { margin: 12px 0 24px; font-size: 26px; }
     .card { padding: 22px; margin: 14px 0; border: 1px solid #30313a; border-radius: 18px; background: #1b1c23; }
     .label { color: #a7a8b3; font-size: 14px; }
@@ -20,23 +20,60 @@
     button:disabled { opacity: .42; }
     button.secondary { background: #33343d; }
     #message { min-height: 24px; margin-top: 12px; color: #90e7bb; text-align: center; }
+    .round-stats { margin-top: 18px; padding-top: 16px; border-top: 1px solid #30313a; }
+    .round-stats h3 { margin: 0 0 8px; }
+    .stats-summary { color: #c2c3cc; margin-bottom: 10px; }
+    #current-round-stats { margin-top: 14px; padding-top: 12px; border-top: 1px solid #30313a; }
+    .volume-control { display: grid; grid-template-columns: 90px minmax(0, 1fr) 48px; gap: 12px; align-items: center; margin-top: 16px; }
+    .volume-control label { color: #e3e3e9; font-weight: 650; }
+    .volume-control input { width: 100%; accent-color: #8c72ff; }
+    .volume-control output { color: #c2c3cc; text-align: right; font-variant-numeric: tabular-nums; }
     @media (min-width: 600px) { body { padding-top: 36px; } }
   </style>
 </head>
 <body>
   <main>
     <h1>⚔️ 레이드 진행 관리</h1>
+    <section class="card" aria-label="Audio volume controls">
+      <div class="label">음량 조절</div>
+      <div class="volume-control">
+        <label for="master-volume">MASTER</label>
+        <input id="master-volume" data-audio-volume="master" type="range" min="0" max="200" value="100">
+        <output id="master-volume-value" for="master-volume">100%</output>
+      </div>
+      <div class="volume-control">
+        <label for="bgm-volume">BGM</label>
+        <input id="bgm-volume" data-audio-volume="bgm" type="range" min="0" max="200" value="100">
+        <output id="bgm-volume-value" for="bgm-volume">100%</output>
+      </div>
+      <div class="volume-control">
+        <label for="attack-volume">타격</label>
+        <input id="attack-volume" data-audio-volume="attack" type="range" min="0" max="200" value="80">
+        <output id="attack-volume-value" for="attack-volume">80%</output>
+      </div>
+      <div class="volume-control">
+        <label for="hit-volume">피격</label>
+        <input id="hit-volume" data-audio-volume="hit" type="range" min="0" max="200" value="80">
+        <output id="hit-volume-value" for="hit-volume">80%</output>
+      </div>
+    </section>
     <section class="card" aria-live="polite">
       <div class="label">현재 문제 응답 현황</div>
       <div class="count"><strong id="answered">0</strong><span> / <span id="total">0</span>명</span></div>
       <div id="round">대기 중</div>
       <div id="status">플레이어가 접속하면 현황이 표시됩니다.</div>
+      <div id="current-round-stats"></div>
     </section>
     <section class="card">
       <div class="label">진행 제어</div>
       <button id="next" type="button">1번 문제 시작</button>
+      <button id="execute" class="secondary" type="button">처형 실행</button>
       <button id="reset" class="secondary" type="button">게임 초기화</button>
       <div id="message" role="status"></div>
+    </section>
+    <section class="card" aria-live="polite">
+      <div class="label">라운드별 정답 통계</div>
+      <div id="statistics"><div class="names">아직 제출된 답이 없습니다.</div></div>
     </section>
   </main>
   <script>
@@ -46,7 +83,11 @@
     const round = document.getElementById("round");
     const status = document.getElementById("status");
     const next = document.getElementById("next");
+    const execute = document.getElementById("execute");
     const message = document.getElementById("message");
+    const statistics = document.getElementById("statistics");
+    const currentRoundStats = document.getElementById("current-round-stats");
+    const volumeControls = [...document.querySelectorAll("[data-audio-volume]")];
     let state = { currentRound: 0, roundCount: 3, playerCount: 0, answeredCount: 0, isStarted: false, gameOver: false };
 
     function render(data) {
@@ -54,19 +95,75 @@
       answered.textContent = state.answeredCount;
       total.textContent = state.playerCount;
       round.textContent = state.currentRound ? `${state.currentRound}번 문제` : "대기 중";
-      status.textContent = state.isStarted ? "응답을 집계하고 있습니다." : state.gameOver ? "보스가 쓰러졌습니다." : "다음 문제를 시작할 수 있습니다.";
+      status.textContent = state.isStarted
+        ? "응답을 집계하고 있습니다."
+        : state.gameOver
+          ? "보스가 쓰러졌습니다."
+          : state.finalRoundComplete
+            ? state.executionRequested ? "처형을 진행하고 있습니다." : "마지막 라운드가 끝났습니다. 관리자 화면에서 처형을 실행하세요."
+            : "다음 문제를 시작할 수 있습니다.";
       const nextRound = state.currentRound + 1;
       next.textContent = nextRound <= state.roundCount ? `${nextRound}번 문제 시작` : "모든 문제 완료";
       next.disabled = nextRound > state.roundCount || state.gameOver;
+      execute.disabled = state.gameOver || state.executionRequested;
+      renderCurrentRoundStats(state.answerStats || []);
+      renderStatistics(state.answerStats || []);
+    }
+
+    function renderCurrentRoundStats(roundStats) {
+      currentRoundStats.replaceChildren();
+      if (!state.currentRound) return;
+      const stats = roundStats.find(item => item.round === state.currentRound);
+      if (!stats) return;
+
+      const summary = document.createElement("div");
+      summary.className = "stats-summary";
+      summary.textContent = `정답률 ${stats.accuracy}% · 정답 ${stats.correctCount}명 · 오답 ${stats.wrongCount}명`;
+      currentRoundStats.appendChild(summary);
+
+    }
+
+    function renderStatistics(roundStats) {
+      statistics.replaceChildren();
+      if (!roundStats.length) {
+        statistics.innerHTML = '<div class="names">아직 제출된 답이 없습니다.</div>';
+        return;
+      }
+      roundStats.slice().reverse().forEach(stats => {
+        const section = document.createElement("div");
+        section.className = "round-stats";
+        const heading = document.createElement("h3");
+        heading.textContent = `${stats.round}번 문제`;
+        const summary = document.createElement("div");
+        summary.className = "stats-summary";
+        summary.textContent = `정답률 ${stats.accuracy}% · 정답 ${stats.correctCount}명 · 오답 ${stats.wrongCount}명`;
+        section.append(heading, summary);
+        statistics.appendChild(section);
+      });
     }
 
     socket.on("admin_state", render);
+    socket.on("audio_volumes", volumes => {
+      volumeControls.forEach(input => {
+        const value = Math.round(volumes[input.dataset.audioVolume] * 100);
+        input.value = value;
+        document.getElementById(`${input.dataset.audioVolume}-volume-value`).textContent = `${value}%`;
+      });
+    });
+    volumeControls.forEach(input => {
+      input.addEventListener("input", () => {
+        const value = Number(input.value);
+        document.getElementById(`${input.dataset.audioVolume}-volume-value`).textContent = `${value}%`;
+        socket.emit("set_audio_volume", { type: input.dataset.audioVolume, volume: value / 100 });
+      });
+    });
     socket.on("game_reset", () => { message.textContent = "게임을 초기화했습니다."; });
-    socket.on("new_question", quiz => { message.textContent = `${quiz.round}번 문제를 시작했습니다.`; });
+    socket.on("new_question", quiz => { message.textContent = `${quiz.round}번 문제를 시작했습니다. (${quiz.timeLimitSeconds}초)`; });
     next.addEventListener("click", () => {
       const nextRound = state.currentRound + 1;
       if (nextRound <= state.roundCount) socket.emit("start_round", { round: nextRound });
     });
+    execute.addEventListener("click", () => socket.emit("execute_final_blow"));
     document.getElementById("reset").addEventListener("click", () => {
       if (confirm("게임을 초기화할까요?")) socket.emit("reset_game");
     });

@@ -1,15 +1,42 @@
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const fs = require("fs");
 const QUIZZES = require("./quizzes.json");
 const SETTINGS = require("./setting.json");
 const QRCode = require("qrcode");
 const { Server } = require("socket.io");
 
+function isValidAudioSetting(audio) {
+  return Boolean(audio) &&
+    typeof audio.path === "string" &&
+    typeof audio.loop === "boolean" &&
+    (audio.path === "" || audio.path.toLowerCase() === "none" ||
+      (path.basename(audio.path) === audio.path &&
+        /^[a-z0-9][a-z0-9 ._-]*\.(mp3|ogg|wav|m4a|aac|flac|webm)$/i.test(audio.path)));
+}
+
 if (
   !SETTINGS.bossName ||
   !Number.isInteger(SETTINGS.maxHp) || SETTINGS.maxHp <= 0 ||
-  !Number.isFinite(SETTINGS.damageFirstToLastRatio) || SETTINGS.damageFirstToLastRatio <= 1 ||
+  !Number.isInteger(SETTINGS.timeLimitSeconds) || SETTINGS.timeLimitSeconds < 1 ||
+  !Array.isArray(SETTINGS.bossImages) || SETTINGS.bossImages.length === 0 ||
+  SETTINGS.bossImages.some(stage =>
+    !Number.isInteger(stage.hp) || stage.hp < 0 || stage.hp > SETTINGS.maxHp ||
+    typeof stage.image !== "string" || !stage.image || path.basename(stage.image) !== stage.image
+  ) ||
+  new Set(SETTINGS.bossImages.map(stage => stage.hp)).size !== SETTINGS.bossImages.length ||
+  !isValidAudioSetting(SETTINGS.audio?.joining) ||
+  !isValidAudioSetting(SETTINGS.audio?.execution) ||
+  !SETTINGS.audio?.rounds || typeof SETTINGS.audio.rounds !== "object" ||
+  !SETTINGS.audio?.volumes ||
+  ["master", "bgm", "attack", "hit"].some(type =>
+    !Number.isInteger(SETTINGS.audio.volumes[type]) ||
+    SETTINGS.audio.volumes[type] < 0 || SETTINGS.audio.volumes[type] > 200
+  ) ||
+  !Number.isFinite(SETTINGS.damageMaxWeight) || SETTINGS.damageMaxWeight <= 0 ||
+  !Number.isFinite(SETTINGS.damageMinWeight) || SETTINGS.damageMinWeight <= 0 ||
+  SETTINGS.damageMinWeight > SETTINGS.damageMaxWeight ||
   !Array.isArray(SETTINGS.characters) || SETTINGS.characters.length === 0 ||
   !Number.isInteger(SETTINGS.attackQueue?.maxBatchSize) ||
   SETTINGS.attackQueue.maxBatchSize < 1 || SETTINGS.attackQueue.maxBatchSize > 4 ||
@@ -28,6 +55,7 @@ let previousTargetHp = SETTINGS.maxHp;
 QUIZZES.forEach((quiz, index) => {
   if (
     quiz.round !== index + 1 ||
+    !isValidAudioSetting(SETTINGS.audio?.rounds?.[String(quiz.round)]) ||
     !Number.isInteger(quiz.targetHp) ||
     quiz.targetHp < 1 ||
     quiz.targetHp > previousTargetHp ||
@@ -51,7 +79,44 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.PORT || 80;
+const PORT = process.env.PORT || 5000;
+
+let currentAudio = null;
+let audioRevision = Date.now();
+const audioVolumes = Object.fromEntries(
+  ["master", "bgm", "attack", "hit"].map(type => [type, SETTINGS.audio.volumes[type] / 100])
+);
+
+const AUDIO_EFFECT_EXTENSIONS = /\.(mp3|ogg|wav|m4a|aac|flac|webm)$/i;
+const AUDIO_EFFECTS = Object.fromEntries(["attack", "hit"].map(type => {
+  const directory = path.join(__dirname, "public", "assets", "audio", type);
+  let files = [];
+  try {
+    files = fs.readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && AUDIO_EFFECT_EXTENSIONS.test(entry.name))
+      .map(entry => entry.name);
+  } catch (error) {
+    console.warn(`Audio effect folder unavailable: ${type}`);
+  }
+  return [type, files];
+}));
+
+function emitRandomAudioEffect(type) {
+  const files = AUDIO_EFFECTS[type] || [];
+  if (!files.length) return;
+  const file = files[Math.floor(Math.random() * files.length)];
+  io.emit("audio_effect", { type, file });
+}
+
+function setAudio(audioSetting) {
+  if (!audioSetting || audioSetting.path === "") return;
+  currentAudio = audioSetting.path.toLowerCase() === "none"
+    ? { path: "none", loop: false, revision: ++audioRevision }
+    : { path: audioSetting.path, loop: audioSetting.loop, revision: ++audioRevision };
+  io.emit("audio_change", currentAudio);
+}
+
+setAudio(SETTINGS.audio.joining);
 
 // --------------------------------------------------
 // Express
@@ -77,6 +142,9 @@ const gameState = {
   gameOver: false,
   finalRoundComplete: false,
   answeredPlayers: new Set(),
+  answerStats: new Map(),
+  roundDamagePlan: null,
+  executionRequested: false,
   playerDamage: new Map(),
 
   // socket.id -> player
@@ -87,6 +155,28 @@ const attackQueue = [];
 let attackQueueTimer = null;
 let openingAttackPending = true;
 let executionTimer = null;
+let roundTimer = null;
+let roundDeadline = null;
+
+function finishRoundOnTimeout(round) {
+  if (!gameState.isStarted || gameState.currentRound !== round) return;
+  const stats = gameState.answerStats.get(round);
+  for (const player of gameState.players.values()) {
+    if (player.answeredRounds.has(round)) continue;
+    player.answeredRounds.add(round);
+    gameState.answeredPlayers.add(player.id);
+    stats?.wrong.push({ nickname: player.nickname, className: player.className, timeout: true });
+    const recoveredDamage = gameState.roundDamagePlan?.slots.pop() || 0;
+    if (gameState.roundDamagePlan) redistributeDamage(gameState.roundDamagePlan, recoveredDamage);
+    io.to(player.id).emit("round_timeout");
+  }
+  gameState.isStarted = false;
+  roundDeadline = null;
+  roundTimer = null;
+  io.emit("round_timeout", { round });
+  broadcastAdminState();
+  completeFinalRoundIfReady();
+}
 
 function getProjectedHp() {
   const queuedDamage = attackQueue.reduce((sum, attack) => sum + attack.damage, 0);
@@ -96,43 +186,71 @@ function getProjectedHp() {
   );
 }
 
+function getDamageRanking() {
+  return [...gameState.playerDamage.values()]
+    .sort((a, b) => b.damage - a.damage)
+    .slice(0, 10)
+    .map(({ playerId, nickname, className, damage }) => ({ playerId, nickname, className, damage }));
+}
+
 function formatDamage(damage) {
   return Number(damage).toLocaleString("ko-KR", {
     maximumFractionDigits: 2
   });
 }
 
-function calculateAttackDamage(targetHp, remainingPlayers) {
-  const H0 = gameState.roundStartingHp;
-  const T = targetHp;
-  const B = Math.max(0, H0 - T);
-  const projectedHp = getProjectedHp();
-  const U = Math.min(B, Math.max(0, H0 - projectedHp));
-  const R = Math.max(0, B - U);
-  const N = Math.max(1, remainingPlayers);
+function getDamageWeight(rankIndex, participantCount) {
+  const N = participantCount - 1;
+  if (N <= 0) return SETTINGS.damageMaxWeight;
+  return SETTINGS.damageMinWeight +
+    (SETTINGS.damageMaxWeight - SETTINGS.damageMinWeight) *
+    ((N - rankIndex) / (N + rankIndex));
+}
 
-  if (R === 0) {
-    return 0;
+function createRoundDamagePlan(targetHp, participantCount) {
+  const totalDamage = Math.max(0, gameState.roundStartingHp - targetHp);
+  const weights = Array.from({ length: participantCount }, (_, rankIndex) =>
+    getDamageWeight(rankIndex, participantCount)
+  );
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  return {
+    // 앞 배열부터 정답자에게 배정되고 뒤 배열부터 오답자가 회수합니다.
+    slots: weights.map(weight => totalWeight ? totalDamage * weight / totalWeight : 0),
+    lastCorrectDamage: null
+  };
+}
+
+function redistributeDamage(plan, amount) {
+  let remaining = amount;
+  while (remaining > 0.000001 && plan.slots.length > 0) {
+    const count = plan.slots.length;
+    const weights = Array.from({ length: count }, (_, rankIndex) =>
+      getDamageWeight(rankIndex, count)
+    );
+    const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+    let distributed = 0;
+
+    plan.slots.forEach((slot, index) => {
+      const share = remaining * weights[index] / weightTotal;
+      const capacity = plan.lastCorrectDamage === null
+        ? share
+        : Math.max(0, plan.lastCorrectDamage - slot);
+      const added = Math.min(share, capacity);
+      plan.slots[index] += added;
+      distributed += added;
+    });
+
+    if (distributed <= 0.000001) break;
+    remaining -= distributed;
   }
-
-  const q = N === 1
-    ? 0
-    : Math.pow(1 / SETTINGS.damageFirstToLastRatio, 1 / (N - 1));
-  let Wtotal = 0;
-  for (let i = 0; i < N; i += 1) {
-    Wtotal += Math.pow(q, i);
-  }
-
-  const Dweighted = R / Wtotal;
-  const damageLimit = U === 0
-    ? R
-    : gameState.lastCorrectDamage * 0.999;
-
-  return Math.max(0, Math.min(Dweighted, damageLimit, R));
 }
 
 function executeFinalBlow() {
-  if (gameState.gameOver || !gameState.finalRoundComplete) {
+  if (
+    gameState.gameOver ||
+    !gameState.executionRequested ||
+    attackQueue.length > 0
+  ) {
     return;
   }
 
@@ -140,38 +258,45 @@ function executeFinalBlow() {
   performers.sort((a, b) => b.damage - a.damage);
   const executor = performers[0];
 
-  if (!executor) {
-    return;
-  }
-
   const finishingDamage = gameState.currentHp;
+  setAudio(SETTINGS.audio.execution);
+  if (executor) {
+    executor.damage += finishingDamage;
+    gameState.playerDamage.set(executor.playerId, executor);
+  }
   gameState.currentHp = 0;
   gameState.gameOver = true;
   gameState.isStarted = false;
+  gameState.executionRequested = false;
 
-  io.emit("player_execution", {
-    playerId: executor.playerId,
-    nickname: executor.nickname,
-    className: executor.className,
-    character: executor.character,
-    bossName: gameState.bossName,
-    damage: finishingDamage
-  });
+  if (executor) {
+    emitRandomAudioEffect("attack");
+    io.emit("player_execution", {
+      playerId: executor.playerId,
+      nickname: executor.nickname,
+      className: executor.className,
+      character: executor.character,
+      bossName: gameState.bossName,
+      damage: finishingDamage
+    });
+  }
 
+  emitRandomAudioEffect("hit");
   io.emit("boss_damaged", {
     damage: finishingDamage,
     currentHp: 0,
     maxHp: gameState.maxHp,
-    attacker: executor.nickname,
-    playerId: executor.playerId
+    attacker: executor?.nickname,
+    playerId: executor?.playerId
   });
+  if (executor) io.emit("damage_ranking", getDamageRanking());
 
   broadcastAdminState();
   executionTimer = setTimeout(() => {
     io.emit("boss_defeated", {
       bossName: gameState.bossName,
       maxHp: gameState.maxHp,
-      executor
+      executor: executor || null
     });
     executionTimer = null;
   }, 1700);
@@ -197,14 +322,6 @@ function completeFinalRoundIfReady() {
   gameState.finalRoundComplete = true;
   gameState.isStarted = false;
   broadcastAdminState();
-
-  if (attackQueue.length === 0) {
-    if (attackQueueTimer !== null) {
-      clearTimeout(attackQueueTimer);
-      attackQueueTimer = null;
-    }
-    executeFinalBlow();
-  }
 }
 
 function queuePlayerAttack(attack) {
@@ -217,7 +334,7 @@ function queuePlayerAttack(attack) {
 function processAttackQueue() {
   if (attackQueue.length === 0) {
     attackQueueTimer = null;
-    if (gameState.finalRoundComplete) {
+    if (gameState.executionRequested) {
       executeFinalBlow();
     }
     return;
@@ -249,12 +366,15 @@ function processAttackQueue() {
     };
     total.damage += attack.damage;
     gameState.playerDamage.set(attack.playerId, total);
+    io.emit("damage_ranking", getDamageRanking());
 
+    emitRandomAudioEffect("attack");
     io.emit("player_attack", {
       ...attack,
       openingAttack
     });
 
+    emitRandomAudioEffect("hit");
     io.emit("boss_damaged", {
       damage: attack.damage,
       currentHp: attack.currentHp,
@@ -264,7 +384,10 @@ function processAttackQueue() {
     });
   });
 
-  if (gameState.finalRoundComplete && attackQueue.length === 0) {
+  if (
+    gameState.executionRequested &&
+    attackQueue.length === 0
+  ) {
     executeFinalBlow();
     return;
   }
@@ -316,13 +439,29 @@ function broadcastPlayers() {
 }
 
 function getAdminState() {
+  const answerStats = QUIZZES.map((quiz) => {
+    const stats = gameState.answerStats.get(quiz.round) || { correct: [], wrong: [] };
+    const totalCount = stats.correct.length + stats.wrong.length;
+    return {
+      round: quiz.round,
+      correctCount: stats.correct.length,
+      wrongCount: stats.wrong.length,
+      accuracy: totalCount
+        ? Math.round(stats.correct.length / totalCount * 100)
+        : 0
+    };
+  });
   return {
     playerCount: gameState.players.size,
     answeredCount: gameState.answeredPlayers.size,
     currentRound: gameState.currentRound,
-    roundCount: QUIZZES.length,
     isStarted: gameState.isStarted,
-    gameOver: gameState.gameOver
+    roundDeadline,
+    roundCount: QUIZZES.length,
+    gameOver: gameState.gameOver,
+    finalRoundComplete: gameState.finalRoundComplete,
+    executionRequested: gameState.executionRequested,
+    answerStats
   };
 }
 
@@ -390,6 +529,7 @@ app.get("/api/state", (req, res) => {
     bossName: gameState.bossName,
     maxHp: gameState.maxHp,
     currentHp: gameState.currentHp,
+    bossImages: SETTINGS.bossImages,
 
     currentRound: gameState.currentRound,
 
@@ -418,10 +558,12 @@ io.on("connection", (socket) => {
 
     maxHp: gameState.maxHp,
     currentHp: gameState.currentHp,
+    bossImages: SETTINGS.bossImages,
 
     currentRound: gameState.currentRound,
-
     isStarted: gameState.isStarted,
+    roundDeadline,
+    timeLimitSeconds: SETTINGS.timeLimitSeconds,
     gameOver: gameState.gameOver,
 
     playerCount: gameState.players.size
@@ -433,6 +575,17 @@ io.on("connection", (socket) => {
     count: gameState.players.size
   });
   socket.emit("admin_state", getAdminState());
+  socket.emit("damage_ranking", getDamageRanking());
+  if (currentAudio) socket.emit("audio_change", currentAudio);
+  socket.emit("audio_volumes", audioVolumes);
+
+  socket.on("set_audio_volume", data => {
+    const type = data?.type;
+    const volume = Number(data?.volume);
+    if (!Object.hasOwn(audioVolumes, type) || !Number.isFinite(volume) || volume < 0 || volume > 2) return;
+    audioVolumes[type] = volume;
+    io.emit("audio_volumes", audioVolumes);
+  });
 
   // -----------------------------------------------
   // 학생 입장
@@ -527,6 +680,8 @@ io.on("connection", (socket) => {
 
         socket.emit("new_question", {
           round: quiz.round,
+          timeLimitSeconds: SETTINGS.timeLimitSeconds,
+          deadline: roundDeadline,
           targetHp: quiz.targetHp,
           bossName: gameState.bossName,
 
@@ -563,13 +718,24 @@ io.on("connection", (socket) => {
     const quiz =
       QUIZZES[round - 1];
 
+    setAudio(SETTINGS.audio.rounds[String(round)]);
+
+    if (roundTimer !== null) clearTimeout(roundTimer);
+    roundDeadline = Date.now() + SETTINGS.timeLimitSeconds * 1000;
+    roundTimer = setTimeout(() => finishRoundOnTimeout(round), SETTINGS.timeLimitSeconds * 1000);
+
     gameState.roundStartingHp = getProjectedHp();
     gameState.lastCorrectDamage = 0;
+    gameState.roundDamagePlan = createRoundDamagePlan(
+      quiz.targetHp,
+      gameState.players.size
+    );
 
     gameState.currentRound =
       round;
 
     gameState.answeredPlayers.clear();
+    gameState.answerStats.set(round, { correct: [], wrong: [] });
 
     gameState.isStarted =
       true;
@@ -595,6 +761,8 @@ io.on("connection", (socket) => {
     // 모든 학생에게 문제 전달
     io.emit("new_question", {
       round: quiz.round,
+      timeLimitSeconds: SETTINGS.timeLimitSeconds,
+      deadline: roundDeadline,
       targetHp: quiz.targetHp,
       bossName: gameState.bossName,
 
@@ -660,7 +828,7 @@ io.on("connection", (socket) => {
     }
 
     // ---------------------------------------------
-    // 이미 해당 라운드에서 정답을 맞혔는지 확인
+    // 라운드당 한 번만 답을 제출할 수 있습니다.
     // ---------------------------------------------
 
     if (
@@ -671,22 +839,16 @@ io.on("connection", (socket) => {
         "attack_result",
         {
           success: false,
-          msg: "이미 타격에 성공했습니다!"
+          msg: "이미 답을 제출했습니다. 이번 라운드에는 다시 고를 수 없습니다."
         }
       );
 
       return;
     }
 
-    const remainingPlayersForDamage = Math.max(
-      1,
-      gameState.players.size - gameState.answeredPlayers.size
-    );
-
-    if (!gameState.answeredPlayers.has(player.id)) {
-      gameState.answeredPlayers.add(player.id);
-      broadcastAdminState();
-    }
+    gameState.answeredPlayers.add(player.id);
+    player.answeredRounds.add(round);
+    const roundStats = gameState.answerStats.get(round);
 
     // ---------------------------------------------
     // 오답
@@ -696,16 +858,24 @@ io.on("connection", (socket) => {
       selected !== quiz.answer
     ) {
 
+      roundStats?.wrong.push({ nickname: player.nickname, className: player.className });
+      const recoveredDamage = gameState.roundDamagePlan?.slots.pop() || 0;
+      if (gameState.roundDamagePlan) {
+        redistributeDamage(gameState.roundDamagePlan, recoveredDamage);
+      }
+      broadcastAdminState();
+
       socket.emit(
         "attack_result",
         {
           success: false,
 
           msg:
-            "방어막에 빗나갔습니다! 다시 조준하세요!"
+            "공격 실패! 오답을 제출해 이번 라운드에는 다시 고를 수 없습니다."
         }
       );
 
+      completeFinalRoundIfReady();
       return;
     }
 
@@ -713,14 +883,13 @@ io.on("connection", (socket) => {
     // 정답
     // ---------------------------------------------
 
-    player.answeredRounds.add(
-      round
-    );
+    roundStats?.correct.push({ nickname: player.nickname, className: player.className });
+    broadcastAdminState();
 
-    const damage = calculateAttackDamage(
-      quiz.targetHp,
-      remainingPlayersForDamage
-    );
+    const damage = gameState.roundDamagePlan?.slots.shift() || 0;
+    if (gameState.roundDamagePlan) {
+      gameState.roundDamagePlan.lastCorrectDamage = damage;
+    }
     gameState.lastCorrectDamage = damage;
 
     console.log(
@@ -779,7 +948,40 @@ io.on("connection", (socket) => {
   // 게임 리셋
   // -----------------------------------------------
 
+  socket.on("execute_final_blow", () => {
+    if (
+      gameState.gameOver ||
+      gameState.executionRequested
+    ) {
+      return;
+    }
+
+    gameState.executionRequested = true;
+    gameState.isStarted = false;
+    if (roundTimer !== null) {
+      clearTimeout(roundTimer);
+      roundTimer = null;
+    }
+    roundDeadline = null;
+    if (attackQueue.length === 0) {
+      if (attackQueueTimer !== null) {
+        clearTimeout(attackQueueTimer);
+        attackQueueTimer = null;
+      }
+      executeFinalBlow();
+    }
+    broadcastAdminState();
+  });
+
   socket.on("reset_game", () => {
+
+    setAudio(SETTINGS.audio.joining);
+
+    if (roundTimer !== null) {
+      clearTimeout(roundTimer);
+      roundTimer = null;
+    }
+    roundDeadline = null;
 
     resetAttackQueue();
 
@@ -804,9 +1006,13 @@ io.on("connection", (socket) => {
       false;
 
     gameState.finalRoundComplete = false;
+    gameState.executionRequested = false;
+    gameState.roundDamagePlan = null;
     gameState.playerDamage.clear();
+    io.emit("damage_ranking", []);
 
     gameState.answeredPlayers.clear();
+    gameState.answerStats.clear();
 
     for (
       const player of gameState.players.values()

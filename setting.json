@@ -1,13 +1,51 @@
 {
   "bossName": "마왕 아볼루온 (Apollyon)",
   "maxHp": 10000,
+  "timeLimitSeconds": 30,
+  "bossImages": [
+    {
+      "hp": 10000,
+      "image": "boss-apollyon.svg"
+    },
+    {
+      "hp": 7000,
+      "image": "boss-apollyon-wounded.svg"
+    },
+    {
+      "hp": 3000,
+      "image": "boss-apollyon-critical.svg"
+    }
+  ],
+  "audio": {
+    "volumes": {
+      "master": 100,
+      "bgm": 29,
+      "attack": 63,
+      "hit": 153
+    },
+    "joining": {
+      "path": "joining.wav",
+      "loop": true
+    },
+    "rounds": {
+      "1": { "path": "Fight.wav", "loop": true },
+      "2": { "path": "", "loop": true },
+      "3": { "path": "", "loop": true },
+      "4": { "path": "", "loop": true }
+    },
+    "execution": {
+      "path": "Endless.wav",
+      "loop": false
+    }
+  },
   "characters": [
     "Knite.png"
   ],
-  "damageFirstToLastRatio": 1.75,
+  "damageMaxWeight": 100,
+  "damageMinWeight": 20,
   "attackQueue": {
-    "minDelayMs": 30,
-    "maxDelayMs": 1000,
+    "minDelayMs": 10,
+    "maxDelayMs": 100,
     "maxBatchSize": 4
   }
 }

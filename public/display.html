@@ -103,6 +103,58 @@
       color: #aaa;
     }
 
+    #round-timer-track {
+      width: 100%;
+      height: 10px;
+      flex: 0 0 10px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, .16);
+    }
+
+    #round-timer-bar {
+      width: 100%;
+      height: 100%;
+      transform: scaleX(0);
+      transform-origin: left center;
+      background: linear-gradient(90deg, #ff5470, #ffd45c, #42d392);
+    }
+
+    #damage-ranking {
+      flex: 0 0 21%;
+      min-width: 0;
+      padding: 18px 12px;
+      border-left: 1px solid rgba(255, 255, 255, .16);
+      background: rgba(8, 8, 12, .42);
+    }
+
+    #damage-ranking h2 {
+      margin: 0 0 8px;
+      color: #ffd700;
+      font-size: clamp(13px, 1.15vw, 19px);
+    }
+
+    #damage-ranking-list {
+      display: grid;
+      gap: 3px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    #damage-ranking-list li {
+      display: grid;
+      grid-template-columns: 1.7em minmax(0, 1fr) auto;
+      gap: 7px;
+      align-items: center;
+      min-height: 20px;
+      color: #f4f4f7;
+      font-size: clamp(20px, .8vw, 14px);
+    }
+
+    .damage-rank-number { color: #aaa; }
+    .damage-rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .damage-rank-value { color: #ffbd69; font-variant-numeric: tabular-nums; }
+
     /* -----------------------------------------
        전투 영역
     ----------------------------------------- */
@@ -126,7 +178,8 @@
 
     #player-side {
 
-      width: 48%;
+      width: 43%;
+      flex: 0 0 43%;
 
       position: relative;
 
@@ -202,9 +255,6 @@
     }
 
     .player-name {
-
-      max-width: 100%;
-
       padding:
         3px 7px;
 
@@ -400,7 +450,8 @@
 
     #vs {
 
-      width: 7%;
+      width: 6%;
+      flex: 0 0 6%;
 
       display: flex;
 
@@ -433,7 +484,7 @@
 
     #boss-side {
 
-      flex: 1;
+      flex: 0 0 30%;
 
       position: relative;
 
@@ -475,15 +526,36 @@
       height: 100%;
     }
 
+    #boss-talk {
+      position: absolute;
+      z-index: 12;
+      top: 14%;
+      left: 50%;
+      width: min(90%, 520px);
+      max-height: 32%;
+      overflow: auto;
+      padding: 12px 16px;
+      border: 1px solid rgba(255, 150, 150, .7);
+      border-radius: 14px;
+      background: rgba(20, 8, 10, .88);
+      color: #ffe2e2;
+      font-size: clamp(12px, 1vw, 20px);
+      font-weight: 750;
+      line-height: 1.45;
+      text-align: center;
+      text-shadow: 0 1px 4px #000;
+      transform: translateX(-50%);
+    }
+
+    #boss-talk:empty { display: none; }
+
     #boss {
 
-      font-size: clamp(
-        130px,
-        16vw,
-        300px
-      );
-
-      line-height: 1;
+      width: clamp(180px, 21vw, 380px);
+      height: clamp(240px, 45vh, 520px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
 
       filter:
         drop-shadow(
@@ -494,6 +566,13 @@
       transition:
         opacity 0.8s ease,
         filter 0.8s ease;
+    }
+
+    #boss-image {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
     }
 
     .boss-shake {
@@ -726,8 +805,8 @@
       background:
         radial-gradient(
           circle,
-          rgba(255,215,0,0.25),
-          rgba(0,0,0,0.95)
+          rgb(132 139 44 / 97%),
+          rgba(0,0,0,0.95) 85%
         );
 
       animation:
@@ -802,6 +881,22 @@
 
     @media (max-width: 800px) {
 
+      #damage-ranking {
+        flex-basis: 24%;
+        padding: 10px 6px;
+      }
+
+      #damage-ranking-list li {
+        min-height: 17px;
+        grid-template-columns: 1.5em minmax(0, 1fr) auto;
+        gap: 3px;
+        font-size: 9px;
+      }
+
+      #damage-ranking h2 {
+        font-size: 12px;
+      }
+
       #header {
         font-size: 18px;
       }
@@ -846,13 +941,16 @@
 
   </header>
 
+  <div id="round-timer-track" role="progressbar" aria-label="문제 제한 시간" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div id="round-timer-bar"></div>
+  </div>
+
 
   <!-- ---------------------------------------
        전투장
   ---------------------------------------- -->
 
   <main id="battlefield">
-
 
     <!-- 플레이어 군단 -->
 
@@ -890,12 +988,19 @@
 
       <div id="boss-wrapper">
 
+        <div id="boss-talk" role="status" aria-live="polite"></div>
+
         <div id="boss">
           👿
         </div>
 
       </div>
 
+    </section>
+
+    <section id="damage-ranking" aria-live="polite" aria-label="누적 데미지 순위">
+      <h2>⚔ 데미지 TOP 10</h2>
+      <ol id="damage-ranking-list"></ol>
     </section>
 
 
@@ -961,6 +1066,274 @@
 <script>
 
   const socket = io();
+  const sceneAudio = new Audio();
+  sceneAudio.preload = "auto";
+  const AUDIO_FADE_MS = 1200;
+  let audioTransitionId = 0;
+  let audioFadeFrame = null;
+  let activeAudioSource = "";
+  let audioFadeInComplete = false;
+  let audioEndingFadeStarted = false;
+  let audioTransitioning = false;
+  let audioUnlocked = false;
+  const audioVolumes = { master: 1, bgm: 1, attack: 0.8, hit: 0.8 };
+
+  function effectiveAudioVolume(type) {
+    return audioVolumes[type] * audioVolumes.master;
+  }
+  const audioGainNodes = new WeakMap();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  let audioContext = null;
+  try {
+    if (AudioContextClass) audioContext = new AudioContextClass();
+  } catch (error) {
+    audioContext = null;
+  }
+
+  function createAudioGain(media, type) {
+    if (!audioContext) {
+      media.volume = Math.min(1, effectiveAudioVolume(type));
+      return null;
+    }
+    let gain = audioGainNodes.get(media);
+    if (!gain) {
+      const source = audioContext.createMediaElementSource(media);
+      gain = audioContext.createGain();
+      source.connect(gain);
+      gain.connect(audioContext.destination);
+      audioGainNodes.set(media, gain);
+    }
+    media.volume = 1;
+    gain.gain.value = effectiveAudioVolume(type);
+    return gain;
+  }
+
+  function setMediaGain(media, type, smooth) {
+    const gain = audioGainNodes.get(media);
+    if (!gain) {
+      media.volume = Math.min(1, effectiveAudioVolume(type));
+      return;
+    }
+    media.volume = 1;
+    gain.gain.cancelScheduledValues(audioContext.currentTime);
+    if (smooth) {
+      gain.gain.setTargetAtTime(effectiveAudioVolume(type), audioContext.currentTime, 0.06);
+    } else {
+      gain.gain.value = effectiveAudioVolume(type);
+    }
+  }
+
+  function updateAudioGain(type, smooth = false) {
+    if (type === "master") {
+      setMediaGain(sceneAudio, "bgm", smooth);
+      for (const channel of ["attack", "hit"]) {
+        audioEffectPools[channel]?.forEach(sound => setMediaGain(sound, channel, smooth));
+      }
+      return;
+    }
+    if (type === "bgm") {
+      setMediaGain(sceneAudio, type, smooth);
+      return;
+    }
+    audioEffectPools[type]?.forEach(sound => setMediaGain(sound, type, smooth));
+  }
+
+  createAudioGain(sceneAudio, "bgm");
+  sceneAudio.volume = 1;
+  const pendingAudioEffects = [];
+  const audioEffectPools = { attack: [], hit: [] };
+  const audioUnlockButton = document.createElement("button");
+  audioUnlockButton.type = "button";
+  audioUnlockButton.textContent = "사운드 재생 허용";
+  audioUnlockButton.setAttribute("aria-label", "사운드 재생 허용");
+  audioUnlockButton.hidden = true;
+  Object.assign(audioUnlockButton.style, {
+    position: "fixed",
+    right: "16px",
+    bottom: "16px",
+    zIndex: "1000",
+    padding: "10px 14px",
+    border: "1px solid rgba(255,255,255,.35)",
+    borderRadius: "10px",
+    background: "rgba(20,8,10,.9)",
+    color: "white",
+    fontSize: "14px",
+    cursor: "pointer"
+  });
+  document.body.appendChild(audioUnlockButton);
+
+  function playAudioEffectNow(effect) {
+    const pool = audioEffectPools[effect.type];
+    if (!pool) return;
+    const sound = new Audio(`/assets/audio/${effect.type}/${encodeURIComponent(effect.file)}`);
+    createAudioGain(sound, effect.type);
+    pool.push(sound);
+    const removeSound = () => {
+      const index = pool.indexOf(sound);
+      if (index >= 0) pool.splice(index, 1);
+    };
+    sound.addEventListener("ended", removeSound, { once: true });
+    sound.addEventListener("error", removeSound, { once: true });
+    while (pool.length > 8) {
+      const oldest = pool.shift();
+      oldest.pause();
+    }
+    Promise.all([sound.play(), audioContext?.resume()]).then(() => {
+      audioUnlocked = true;
+    }).catch(() => {
+      sound.pause();
+      removeSound();
+      if (!audioUnlocked) {
+        const previousEffect = pendingAudioEffects.findIndex(item => item.type === effect.type);
+        if (previousEffect >= 0) pendingAudioEffects.splice(previousEffect, 1);
+        pendingAudioEffects.push(effect);
+        audioUnlockButton.hidden = false;
+      }
+    });
+  }
+
+  function flushPendingAudioEffects() {
+    const queuedEffects = pendingAudioEffects.splice(0);
+    queuedEffects.forEach(playAudioEffectNow);
+  }
+
+  function fadeSceneAudio(targetVolume, durationMs, onComplete) {
+    if (audioFadeFrame !== null) cancelAnimationFrame(audioFadeFrame);
+    const initialVolume = sceneAudio.volume;
+    const startedAt = performance.now();
+    const duration = Math.max(1, durationMs);
+    const animate = now => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      sceneAudio.volume = initialVolume + (targetVolume - initialVolume) * progress;
+      if (progress < 1) {
+        audioFadeFrame = requestAnimationFrame(animate);
+      } else {
+        audioFadeFrame = null;
+        onComplete?.();
+      }
+    };
+    audioFadeFrame = requestAnimationFrame(animate);
+  }
+
+  function playSceneAudio() {
+    const transitionId = audioTransitionId;
+    const playPromise = sceneAudio.play();
+    if (!playPromise?.then) {
+      audioUnlockButton.hidden = true;
+      fadeSceneAudio(1, AUDIO_FADE_MS);
+      return;
+    }
+    Promise.all([playPromise, audioContext?.resume()]).then(() => {
+      if (transitionId !== audioTransitionId) return;
+      audioUnlocked = true;
+      audioUnlockButton.hidden = true;
+      flushPendingAudioEffects();
+      const fadeInMs = Number.isFinite(sceneAudio.duration)
+        ? Math.min(AUDIO_FADE_MS, Math.max(150, sceneAudio.duration * 450))
+        : AUDIO_FADE_MS;
+      fadeSceneAudio(1, fadeInMs, () => {
+        if (transitionId === audioTransitionId) audioFadeInComplete = true;
+      });
+    }).catch(() => {
+      if (transitionId === audioTransitionId) audioUnlockButton.hidden = false;
+    });
+  }
+
+  audioUnlockButton.addEventListener("click", () => {
+    audioUnlocked = true;
+    audioUnlockButton.hidden = true;
+    flushPendingAudioEffects();
+    if (sceneAudio.src) playSceneAudio();
+  });
+
+  socket.on("audio_effect", effect => {
+    if (!effect || !audioEffectPools[effect.type] || !effect.file) return;
+    playAudioEffectNow(effect);
+  });
+
+  socket.on("audio_volumes", volumes => {
+    for (const type of Object.keys(audioVolumes)) {
+      if (Number.isFinite(volumes[type])) {
+        audioVolumes[type] = Math.max(0, Math.min(2, volumes[type]));
+      }
+    }
+    updateAudioGain("master", true);
+    if (audioContext?.state === "suspended") audioContext.resume().catch(() => {});
+  });
+
+  function stopSceneAudio(transitionId) {
+    if (transitionId !== audioTransitionId) return;
+    if (audioFadeFrame !== null) cancelAnimationFrame(audioFadeFrame);
+    audioFadeFrame = null;
+    sceneAudio.pause();
+    sceneAudio.removeAttribute("src");
+    sceneAudio.load();
+    sceneAudio.volume = 1;
+    activeAudioSource = "";
+    audioTransitioning = false;
+    audioFadeInComplete = false;
+    audioEndingFadeStarted = false;
+    audioUnlockButton.hidden = true;
+  }
+
+  socket.on("audio_change", audioSetting => {
+    if (!audioSetting || !audioSetting.path) return;
+    if (audioSetting.path.toLowerCase() === "none") {
+      const transitionId = ++audioTransitionId;
+      audioTransitioning = true;
+      audioEndingFadeStarted = false;
+      if (sceneAudio.paused || !sceneAudio.src) {
+        stopSceneAudio(transitionId);
+      } else {
+        fadeSceneAudio(0, AUDIO_FADE_MS, () => stopSceneAudio(transitionId));
+      }
+      return;
+    }
+
+    const revision = audioSetting.revision ? `?v=${encodeURIComponent(audioSetting.revision)}` : "";
+    const source = `/assets/audio/${encodeURIComponent(audioSetting.path)}${revision}`;
+    const resolvedSource = new URL(source, window.location.href).href;
+    if (sceneAudio.src === resolvedSource && !sceneAudio.paused && !sceneAudio.ended &&
+        !audioTransitioning && !audioEndingFadeStarted) {
+      sceneAudio.loop = Boolean(audioSetting.loop);
+      return;
+    }
+
+    const transitionId = ++audioTransitionId;
+    audioTransitioning = true;
+    audioEndingFadeStarted = false;
+    audioFadeInComplete = false;
+    const beginNewTrack = () => {
+      if (transitionId !== audioTransitionId) return;
+      if (audioFadeFrame !== null) cancelAnimationFrame(audioFadeFrame);
+      audioFadeFrame = null;
+      audioTransitioning = false;
+      sceneAudio.pause();
+      sceneAudio.src = source;
+      sceneAudio.loop = Boolean(audioSetting.loop);
+      sceneAudio.load();
+      sceneAudio.currentTime = 0;
+      sceneAudio.volume = 0;
+      activeAudioSource = resolvedSource;
+      playSceneAudio();
+    };
+
+    if (!sceneAudio.paused && sceneAudio.volume > 0) {
+      fadeSceneAudio(0, AUDIO_FADE_MS, beginNewTrack);
+    } else {
+      beginNewTrack();
+    }
+  });
+
+  sceneAudio.addEventListener("timeupdate", () => {
+    if (audioTransitioning || sceneAudio.loop || !activeAudioSource || !audioFadeInComplete || audioEndingFadeStarted) return;
+    if (!Number.isFinite(sceneAudio.duration)) return;
+    const remainingMs = (sceneAudio.duration - sceneAudio.currentTime) * 1000;
+    if (remainingMs <= AUDIO_FADE_MS) {
+      audioEndingFadeStarted = true;
+      fadeSceneAudio(0, Math.max(100, remainingMs), () => sceneAudio.pause());
+    }
+  });
   let bossName = "마왕 아볼루온 (Apollyon)";
 
 
@@ -983,6 +1356,39 @@
       "round-display"
     );
 
+  const roundTimerTrack = document.getElementById("round-timer-track");
+  const roundTimerBar = document.getElementById("round-timer-bar");
+  let roundTimerInterval = null;
+
+  function startRoundTimer(deadline, durationSeconds) {
+    if (roundTimerInterval !== null) clearInterval(roundTimerInterval);
+    const totalMs = Math.max(1, durationSeconds * 1000);
+    roundTimerTrack.setAttribute("aria-valuenow", "100");
+    roundTimerBar.style.transition = "none";
+    roundTimerBar.style.transform = "scaleX(1)";
+    requestAnimationFrame(() => {
+      const remaining = Math.max(0, deadline - Date.now());
+      roundTimerBar.style.transition = `transform ${remaining}ms linear`;
+      roundTimerBar.style.transform = "scaleX(0)";
+    });
+    roundTimerInterval = setInterval(() => {
+      const remaining = Math.max(0, deadline - Date.now());
+      roundTimerTrack.setAttribute("aria-valuenow", String(Math.ceil(remaining / totalMs * 100)));
+      if (remaining === 0) {
+        clearInterval(roundTimerInterval);
+        roundTimerInterval = null;
+      }
+    }, 200);
+  }
+
+  function stopRoundTimer() {
+    if (roundTimerInterval !== null) clearInterval(roundTimerInterval);
+    roundTimerInterval = null;
+    roundTimerBar.style.transition = "none";
+    roundTimerBar.style.transform = "scaleX(0)";
+    roundTimerTrack.setAttribute("aria-valuenow", "0");
+  }
+
   const hpBar =
     document.getElementById(
       "hp-bar"
@@ -997,8 +1403,25 @@
     document.getElementById(
       "boss"
     );
+  const bossImage = document.createElement("img");
+  bossImage.id = "boss-image";
+  bossImage.alt = "아볼루온";
+  bossImage.src = "/assets/bosses/boss-apollyon.svg";
+  boss.replaceChildren(bossImage);
+  let bossImageStages = [];
+
+  function updateBossImage(currentHp) {
+    if (!bossImageStages.length) return;
+    const stages = [...bossImageStages].sort((a, b) => a.hp - b.hp);
+    const stage = stages.find(item => currentHp <= item.hp) || stages[stages.length - 1];
+    const imagePath = `/assets/bosses/${stage.image}`;
+    if (bossImage.getAttribute("src") !== imagePath) {
+      bossImage.setAttribute("src", imagePath);
+    }
+  }
 
   const bossLabel = document.getElementById("boss-label");
+  const bossTalk = document.getElementById("boss-talk");
   const victoryTitle = document.getElementById("victory-title");
 
   const dialogue =
@@ -1038,12 +1461,15 @@
     maxHp
   ) {
 
+    const displayedHp = Math.floor(currentHp);
+    updateBossImage(displayedHp);
+
     const percent =
       Math.max(
         0,
         Math.min(
           100,
-          (currentHp / maxHp) * 100
+          (displayedHp / maxHp) * 100
         )
       );
 
@@ -1051,7 +1477,7 @@
       `${percent}%`;
 
     hpText.innerText =
-      `${currentHp.toLocaleString()} / ${maxHp.toLocaleString()} HP`;
+      `${displayedHp.toLocaleString()} / ${maxHp.toLocaleString()} HP`;
 
   }
 
@@ -1202,6 +1628,7 @@
     data => {
 
       bossName = data.bossName || bossName;
+      bossImageStages = data.bossImages || [];
       bossLabel.innerText = `👿 ${bossName}`;
       victoryTitle.innerText = `${bossName} 격파!`;
 
@@ -1220,6 +1647,12 @@
 
       }
 
+      if (data.isStarted && data.roundDeadline) {
+        startRoundTimer(data.roundDeadline, data.timeLimitSeconds);
+      } else {
+        stopRoundTimer();
+      }
+
     }
   );
 
@@ -1234,13 +1667,76 @@
     quiz => {
 
       roundDisplay.innerText =
-        `${quiz.round} ROUND · GOAL ${quiz.targetHp.toLocaleString()} HP`;
+        `${quiz.round} ROUND`;
 
-      dialogue.innerText =
-        `👿 ${bossName}: "${quiz.bossTalk}"`;
+      startRoundTimer(quiz.deadline, quiz.timeLimitSeconds);
+
+      bossTalk.innerText = quiz.bossTalk || "";
+      dialogue.innerText = "";
 
     }
   );
+
+  socket.on("round_timeout", stopRoundTimer);
+
+  const damageRankingRows = new Map();
+  socket.on("damage_ranking", ranking => {
+    const list = document.getElementById("damage-ranking-list");
+    const previousTops = new Map(
+      [...damageRankingRows].map(([key, row]) => [key, row.getBoundingClientRect().top])
+    );
+    if (!ranking.length) {
+      damageRankingRows.clear();
+      list.replaceChildren();
+      const empty = document.createElement("li");
+      empty.textContent = "";
+      list.appendChild(empty);
+      return;
+    }
+
+    const visibleKeys = new Set();
+    ranking.forEach((player, index) => {
+      const key = player.playerId || `${player.nickname}\u0000${player.className || ""}`;
+      visibleKeys.add(key);
+      let row = damageRankingRows.get(key);
+      if (!row) {
+        row = document.createElement("li");
+        row.innerHTML = '<span class="damage-rank-number"></span><span class="damage-rank-name"></span><span class="damage-rank-value"></span>';
+        damageRankingRows.set(key, row);
+      }
+
+      row.dataset.rank = String(index + 1);
+      row.dataset.damage = String(player.damage);
+      row.querySelector(".damage-rank-number").textContent = `${index + 1}.`;
+      row.querySelector(".damage-rank-name").textContent = player.className
+        ? `${player.nickname} · ${player.className}`
+        : player.nickname;
+      row.querySelector(".damage-rank-value").textContent = Number(player.damage).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+
+      list.appendChild(row);
+    });
+
+    for (const [key, row] of damageRankingRows) {
+      if (!visibleKeys.has(key)) {
+        row.remove();
+        damageRankingRows.delete(key);
+      }
+    }
+
+    for (const [key, row] of damageRankingRows) {
+      const previousTop = previousTops.get(key);
+      if (previousTop === undefined) continue;
+      const movement = previousTop - row.getBoundingClientRect().top;
+      if (Math.abs(movement) < 1) continue;
+      row.animate(
+        [
+          { transform: `translateY(${movement}px)` },
+          { transform: "translateY(0)" }
+        ],
+        { duration: 500, easing: "cubic-bezier(.2,.8,.2,1)" }
+      );
+    }
+  });
 
 
   // ------------------------------------------
@@ -1562,6 +2058,8 @@
     "game_reset",
     data => {
 
+      stopRoundTimer();
+
       document.querySelectorAll(".execution-attacking").forEach(attacker => {
         attacker.classList.remove("execution-attacking");
         attacker.style.removeProperty("--attack-x");
@@ -1593,6 +2091,7 @@
 
       roundDisplay.innerText =
         "대기 중";
+      bossTalk.innerText = "";
 
     }
   );

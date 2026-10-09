@@ -140,6 +140,7 @@
       background: #202126;
       text-align: left;
       overscroll-behavior: contain;
+      scrollbar-width: none;
     }
 
     .attack-log-entry {
@@ -231,15 +232,16 @@
       사령관의 명령을 기다리는 중입니다...
     </div>
 
-    <div id="boss-shout">
-      보스 도발 대기 중...
-    </div>
-
     <div id="attack-log" role="log" aria-live="polite" aria-label="정답 공격 로그">
       <div class="attack-log-empty">정답 공격 로그가 여기에 표시됩니다.</div>
     </div>
 
+    <div id="boss-shout">
+      보스 도발 대기 중...
+    </div>
+
     <h3 id="question-text"></h3>
+    <div id="question-timer" aria-live="polite"></div>
 
     <div id="feedback"></div>
 
@@ -253,6 +255,7 @@
     const socket = io();
 
     let currentRound = 0;
+    let questionTimerInterval = null;
 
     let joined = false;
 
@@ -367,6 +370,8 @@
       "new_question",
       quiz => {
 
+        if (questionTimerInterval !== null) clearInterval(questionTimerInterval);
+
         currentRound =
           quiz.round;
 
@@ -387,6 +392,18 @@
           .getElementById("question-text")
           .innerText =
           quiz.question;
+
+        const timer = document.getElementById("question-timer");
+        const updateTimer = () => {
+          const secondsLeft = Math.max(0, Math.ceil((quiz.deadline - Date.now()) / 1000));
+          timer.innerText = `남은 시간 ${secondsLeft}초`;
+          if (secondsLeft === 0 && questionTimerInterval !== null) {
+            clearInterval(questionTimerInterval);
+            questionTimerInterval = null;
+          }
+        };
+        updateTimer();
+        questionTimerInterval = setInterval(updateTimer, 250);
 
 
         document
@@ -429,6 +446,13 @@
 
       }
     );
+
+    socket.on("round_timeout", () => {
+      if (questionTimerInterval !== null) clearInterval(questionTimerInterval);
+      questionTimerInterval = null;
+      document.getElementById("question-timer").innerText = "시간 종료";
+      document.querySelectorAll(".opt-btn").forEach(button => { button.disabled = true; });
+    });
 
 
     // -----------------------------------------
@@ -502,29 +526,6 @@
 
         }
 
-
-        // 오답이면 다시 선택 가능
-        if (!result.success) {
-
-          setTimeout(
-            () => {
-
-              document
-                .querySelectorAll(
-                  ".opt-btn"
-                )
-                .forEach(
-                  button => {
-                    button.disabled =
-                      false;
-                  }
-                );
-
-            },
-            300
-          );
-
-        }
 
       }
     );
